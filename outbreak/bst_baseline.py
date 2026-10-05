@@ -1,116 +1,152 @@
-"""Plain, UNBALANCED binary search tree: benchmark baseline only.
+"""A plain, UNBALANCED binary search tree. Used only as a benchmark baseline.
 
-Same interface as AvlTree but no rebalancing. Sorted input turns it into a linked
-list (height n), which is exactly what the benchmark shows. Everything is iterative:
-a recursive version would hit Python's recursion limit on a degenerate tree.
+It has the same functions as AvlTree but never rebalances. If ids arrive in
+sorted order every new node goes to the right of the previous one, so the tree
+becomes a chain of height n and every insert/search takes O(n).
 """
-from typing import List, Optional
-
-from .patient import Patient
 
 
-class _Node:
-    __slots__ = ("data", "left", "right")
-
-    def __init__(self, data: Patient):
-        self.data = data
-        self.left: Optional["_Node"] = None
-        self.right: Optional["_Node"] = None
+class BstNode:
+    def __init__(self, patient):
+        self.data = patient
+        self.left = None
+        self.right = None
 
 
 class BstBaseline:
-    def __init__(self) -> None:
-        self._root: Optional[_Node] = None
-        self._count = 0
+    def __init__(self):
+        self.root = None
+        self.count = 0
+        self.removed = False   # helper flag used by remove()
 
-    def __len__(self) -> int:
-        return self._count
+    def __len__(self):
+        return self.count
 
-    def insert(self, p: Patient) -> bool:
-        """Standard BST insert. O(h) for tree height h.
+    def insert(self, patient):
+        """Add a patient. True if the id is new, False if it replaced a record.
 
-        h is ~log n for random input but n for sorted input -> O(n) per insert and
-        O(n^2) for n sorted inserts. That is the weakness the AVL tree fixes.
+        Time: O(h) where h is the tree height. h is about log n for random
+        input but n for sorted input, so n sorted inserts cost O(n^2) in total.
+        We use a loop (not recursion) so a tree 100000 levels deep is no problem.
         """
-        if self._root is None:
-            self._root = _Node(p)
-            self._count += 1
+        if self.root is None:                  # empty tree: the new node is the root
+            self.root = BstNode(patient)
+            self.count += 1
             return True
-        n = self._root
+
+        current = self.root
         while True:
-            if p.id == n.data.id:
-                n.data = p
+            if patient.id == current.data.id:  # id already stored: replace the record
+                current.data = patient
                 return False
-            side = "left" if p.id < n.data.id else "right"
-            child = getattr(n, side)
-            if child is None:
-                setattr(n, side, _Node(p))
-                self._count += 1
-                return True
-            n = child
+            if patient.id < current.data.id:   # go left
+                if current.left is None:       # free spot found: attach the new node
+                    current.left = BstNode(patient)
+                    self.count += 1
+                    return True
+                current = current.left
+            else:                              # go right
+                if current.right is None:
+                    current.right = BstNode(patient)
+                    self.count += 1
+                    return True
+                current = current.right
 
-    def remove(self, pid: int) -> bool:
-        """Delete a key. O(h). Same trick as AVL (two children -> in-order successor), no rebalancing."""
-        parent, n = None, self._root
-        while n and n.data.id != pid:
-            parent, n = n, (n.left if pid < n.data.id else n.right)
-        if n is None:
-            return False
-        if n.left and n.right:  # copy successor's record here, then delete the successor node
-            sp, s = n, n.right
-            while s.left:
-                sp, s = s, s.left
-            n.data = s.data
-            parent, n = sp, s
-        child = n.left or n.right  # n now has at most one child
-        if parent is None:
-            self._root = child
-        elif parent.left is n:
-            parent.left = child
+    def remove(self, patient_id):
+        """Delete a patient. True if it was present. Time: O(h).
+
+        Recursive, so only use it on small trees (a 100000-deep chain would
+        overflow Python's recursion limit). The benchmarks never call it.
+        """
+        self.removed = False
+        self.root = self._remove(self.root, patient_id)
+        if self.removed:
+            self.count -= 1
+        return self.removed
+
+    def _remove(self, node, patient_id):
+        if node is None:
+            return None
+        if patient_id < node.data.id:
+            node.left = self._remove(node.left, patient_id)
+        elif patient_id > node.data.id:
+            node.right = self._remove(node.right, patient_id)
         else:
-            parent.right = child
-        self._count -= 1
-        return True
+            self.removed = True
+            if node.left is None:      # 0 or 1 child: the child takes its place
+                return node.right
+            if node.right is None:
+                return node.left
+            # Two children: copy the next-larger record here, delete that node instead.
+            smallest = node.right
+            while smallest.left is not None:
+                smallest = smallest.left
+            node.data = smallest.data
+            keep = self.removed
+            node.right = self._remove(node.right, smallest.data.id)
+            self.removed = keep
+        return node
 
-    def search(self, pid: int) -> Optional[Patient]:
-        """Find a record. O(h)."""
-        n = self._root
-        while n:
-            if pid == n.data.id:
-                return n.data
-            n = n.left if pid < n.data.id else n.right
+    def search(self, patient_id):
+        """Return the Patient with this id or None. Time: O(h)."""
+        node = self.root
+        while node is not None:
+            if patient_id == node.data.id:
+                return node.data
+            if patient_id < node.data.id:
+                node = node.left
+            else:
+                node = node.right
         return None
 
-    def inorder(self) -> List[Patient]:
-        """Sorted records with an explicit stack. O(n).
+    def inorder(self):
+        """All patients sorted by id. Time: O(n).
 
-        Push the whole left spine; a pop visits the smallest unvisited key, then we
-        continue with that node's right subtree.
+        Uses a stack instead of recursion. We go as far left as possible
+        (remembering the nodes on the way), visit a node, then do the same in its
+        right subtree. That visits the nodes in sorted order.
         """
-        out, stack, cur = [], [], self._root
-        while cur or stack:
-            while cur:
-                stack.append(cur)
-                cur = cur.left
-            cur = stack.pop()
-            out.append(cur.data)
-            cur = cur.right
-        return out
+        result = []
+        stack = []
+        node = self.root
+        while node is not None or len(stack) > 0:
+            while node is not None:        # go left as far as possible
+                stack.append(node)
+                node = node.left
+            node = stack.pop()             # the smallest node not yet visited
+            result.append(node.data)
+            node = node.right              # then continue with its right subtree
+        return result
 
-    def range(self, lo: int, hi: int) -> List[Patient]:
-        """Ids in [lo, hi]. O(n): a plain filter over the in-order list (AVL prunes and is O(log n + k))."""
-        return [p for p in self.inorder() if lo <= p.id <= hi]
+    def range(self, low, high):
+        """Patients with low <= id <= high. Time: O(n) (simply filters the sorted list)."""
+        result = []
+        for patient in self.inorder():
+            if low <= patient.id <= high:
+                result.append(patient)
+        return result
 
-    def height(self) -> int:
-        """Height, level by level. O(n)."""
-        level = [self._root] if self._root else []
+    def height(self):
+        """Height of the tree, counted level by level. Time: O(n)."""
+        if self.root is None:
+            return 0
+        level = [self.root]                # all nodes on the current level
         h = 0
-        while level:
-            h += 1
-            level = [c for n in level for c in (n.left, n.right) if c]
+        while len(level) > 0:
+            h += 1                         # we are on one more level
+            next_level = []
+            for node in level:             # collect the children of this level
+                if node.left is not None:
+                    next_level.append(node.left)
+                if node.right is not None:
+                    next_level.append(node.right)
+            level = next_level
         return h
 
-    def validate(self) -> bool:
-        """Keys strictly increasing in-order and count consistent."""
-        ids = [p.id for p in self.inorder()]
-        return all(a < b for a, b in zip(ids, ids[1:])) and len(ids) == self._count
+    def validate(self):
+        """True if the ids come out strictly increasing and the count is right."""
+        patients = self.inorder()
+        for i in range(1, len(patients)):
+            if patients[i - 1].id >= patients[i].id:
+                return False
+        return len(patients) == self.count

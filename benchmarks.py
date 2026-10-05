@@ -1,141 +1,182 @@
-"""Benchmarks. Every number printed or written to CSV comes from a real run here.
+"""Benchmarks. Every number printed or saved comes from a real run of this file.
 
-Usage: python3 benchmarks.py [--full] [--out results]
-Each timing is repeated REPS times on identical inputs and the mean is reported.
+Usage:  python3 benchmarks.py            (saves CSV files into results/)
+        python3 benchmarks.py --full     (also times the plain BST at n = 100000)
 
-Plain-BST insertion of 100000 SORTED keys is ~5 * 10^9 loop steps (O(n^2)), which in
-pure Python takes many minutes per repeat, so that single cell is skipped unless you
-pass --full. Skipped cells are shown as "skipped" and never filled with invented numbers.
+Each timing is repeated 5 times on the SAME input and the mean (average) is reported.
+
+Note: inserting 100000 SORTED keys into the plain BST takes about 5 billion steps
+(O(n^2)), which is many minutes per repeat in Python. So that one measurement is
+skipped unless you pass --full. A skipped cell says "skipped"; no numbers are invented.
 """
-import argparse
 import os
 import random
+import sys
 import time
 
 from outbreak.allocation import dp_allocate, greedy_allocate
 from outbreak.avl_tree import AvlTree
 from outbreak.bst_baseline import BstBaseline
 from outbreak.data_gen import generate_contact_graph, random_allocation_instance
-from outbreak.graph import Graph
 from outbreak.patient import Patient
 
-REPS = 5
+REPEATS = 5
 
 
-def mean_ms(fn) -> float:
-    """Run fn() REPS times; return the mean wall-clock time in milliseconds."""
-    total = 0.0
-    for _ in range(REPS):
-        t0 = time.perf_counter()
-        fn()
-        total += time.perf_counter() - t0
-    return total / REPS * 1000.0
+def time_it(function, *arguments):
+    """Call function(*arguments) REPEATS times.
+
+    Returns (mean time in milliseconds, the result of the last call).
+    """
+    total_seconds = 0.0
+    result = None
+    for i in range(REPEATS):
+        start = time.perf_counter()               # clock before
+        result = function(*arguments)
+        total_seconds += time.perf_counter() - start   # add the elapsed time
+    return total_seconds / REPEATS * 1000.0, result
 
 
-def bench_trees(out_dir: str, full: bool) -> None:
-    print(f"\n[1] AVL vs plain BST, sorted insertions (mean of {REPS} runs)")
-    print(f"{'n':<8}{'AVL height':<12}{'BST height':<12}{'AVL ms':<14}{'BST ms':<14}")
-    rows = ["n,avl_height,bst_height,avl_ms,bst_ms"]
-    for n in (1000, 10000, 100000):
-        data = [Patient(i, 40, i % 5, 1 + i % 5) for i in range(n)]  # identical input for both
-        h = {}
+def build_avl(patients):
+    tree = AvlTree()
+    for patient in patients:
+        tree.insert(patient)
+    return tree
 
-        def build_avl():
-            t = AvlTree()
-            for p in data:
-                t.insert(p)
-            h["avl"] = t.height()
 
-        def build_bst():
-            t = BstBaseline()
-            for p in data:
-                t.insert(p)
-            h["bst"] = t.height()
+def build_bst(patients):
+    tree = BstBaseline()
+    for patient in patients:
+        tree.insert(patient)
+    return tree
 
-        avl_ms = mean_ms(build_avl)
-        if n == 100000 and not full:
-            bst_h, bst_ms = "skipped", "skipped"
+
+def save_csv(folder, filename, lines):
+    """Write a list of text lines to folder/filename."""
+    with open(os.path.join(folder, filename), "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def bench_trees(folder, run_full):
+    print("\n[1] AVL vs plain BST, sorted insertions (mean of %d runs)" % REPEATS)
+    print("%-8s%-12s%-12s%-14s%-14s" % ("n", "AVL height", "BST height", "AVL ms", "BST ms"))
+    lines = ["n,avl_height,bst_height,avl_ms,bst_ms"]
+    for n in [1000, 10000, 100000]:
+        # The same list of patients (ids already sorted 0..n-1) goes into both trees.
+        patients = []
+        for i in range(n):
+            patients.append(Patient(i, 40, i % 5, 1 + i % 5))
+
+        avl_ms, avl_tree = time_it(build_avl, patients)
+        if n == 100000 and not run_full:
+            bst_height = "skipped"
+            bst_ms = "skipped"
+            bst_ms_text = "skipped"
         else:
-            bst_ms = mean_ms(build_bst)
-            bst_h = h["bst"]
-        bst_ms_txt = bst_ms if isinstance(bst_ms, str) else f"{bst_ms:.3f}"
-        print(f"{n:<8}{h['avl']:<12}{bst_h:<12}{avl_ms:<14.3f}{bst_ms_txt:<14}")
-        rows.append(f"{n},{h['avl']},{bst_h},{avl_ms},{bst_ms}")
-    write_csv(out_dir, "bench_tree.csv", rows)
+            bst_ms, bst_tree = time_it(build_bst, patients)
+            bst_height = bst_tree.height()
+            bst_ms_text = "%.3f" % bst_ms
+        print("%-8d%-12d%-12s%-14.3f%-14s"
+              % (n, avl_tree.height(), bst_height, avl_ms, bst_ms_text))
+        lines.append("%d,%d,%s,%s,%s" % (n, avl_tree.height(), bst_height, avl_ms, bst_ms))
+    save_csv(folder, "bench_tree.csv", lines)
 
 
-def bench_paths(out_dir: str) -> None:
-    sources, targets_per_source = 20, 10  # up to 200 (source, target) pairs per size
+def bench_paths(folder):
     print("\n[2] Dijkstra (most likely) vs BFS (fewest hops), average degree 6")
-    print(f"{'nodes':<8}{'edges':<9}{'dijkstra ms':<13}{'bfs ms':<10}{'pairs':<7}"
-          f"{'differ':<8}{'differ %':<10}{'mean p likely':<15}{'mean p hops':<12}")
-    rows = ["nodes,edges,dijkstra_ms,bfs_ms,pairs,paths_differ,differ_pct,mean_p_likely,mean_p_hops"]
-    for n in (1000, 10000, 100000):
-        g = generate_contact_graph(n, 6.0, 99)
-        dijkstra_ms = mean_ms(lambda: g.likely_path(0))
-        bfs_ms = mean_ms(lambda: g.bfs_levels(0))  # single-source, like Dijkstra
+    print("%-8s%-9s%-13s%-10s%-7s%-8s%-10s%-15s%-12s"
+          % ("nodes", "edges", "dijkstra ms", "bfs ms", "pairs", "differ", "differ %",
+             "mean p likely", "mean p hops"))
+    lines = ["nodes,edges,dijkstra_ms,bfs_ms,pairs,paths_differ,differ_pct,"
+             "mean_p_likely,mean_p_hops"]
+    for n in [1000, 10000, 100000]:
+        graph = generate_contact_graph(n, 6.0, 99)     # the same graph for both methods
+
+        # Runtime: both start at node 0 and compute results for ALL nodes.
+        dijkstra_ms, ignore = time_it(graph.likely_path, 0)
+        bfs_ms, ignore = time_it(graph.bfs_levels, 0)
+
+        # How often do the two paths differ? Try 20 random sources x 10 random targets.
         rng = random.Random(123)
-        pairs = differ = 0
-        sum_likely = sum_hops = 0.0
-        for _ in range(sources):
-            s = rng.randrange(n)
-            result = g.likely_path(s)
-            for _ in range(targets_per_source):
-                t = rng.randrange(n)
-                if t == s:
+        pairs = 0
+        differ = 0
+        sum_p_likely = 0.0
+        sum_p_hops = 0.0
+        for s in range(20):
+            source = rng.randrange(n)
+            result = graph.likely_path(source)       # one Dijkstra serves all 10 targets
+            for t in range(10):
+                target = rng.randrange(n)
+                if target == source:
                     continue
-                likely = Graph.reconstruct_path(result, s, t)
-                if not likely:
-                    continue  # other component: nothing to compare
-                hops = g.hop_path(s, t)
+                likely = graph.reconstruct_path(result, source, target)
+                if len(likely) == 0:
+                    continue                         # not connected: nothing to compare
+                hops = graph.hop_path(source, target)
                 pairs += 1
-                differ += likely != hops
-                sum_likely += g.path_probability(likely)
-                sum_hops += g.path_probability(hops)
-        pct = 100.0 * differ / pairs if pairs else 0.0
-        mp_l, mp_h = (sum_likely / pairs, sum_hops / pairs) if pairs else (0.0, 0.0)
-        print(f"{n:<8}{g.edge_count:<9}{dijkstra_ms:<13.3f}{bfs_ms:<10.3f}{pairs:<7}"
-              f"{differ:<8}{pct:<10.1f}{mp_l:<15.5f}{mp_h:<12.5f}")
-        rows.append(f"{n},{g.edge_count},{dijkstra_ms},{bfs_ms},{pairs},{differ},{pct},{mp_l},{mp_h}")
-    write_csv(out_dir, "bench_paths.csv", rows)
+                if likely != hops:                   # the two lists of nodes are different
+                    differ += 1
+                sum_p_likely += graph.path_probability(likely)
+                sum_p_hops += graph.path_probability(hops)
+
+        if pairs > 0:
+            differ_pct = 100.0 * differ / pairs
+            mean_likely = sum_p_likely / pairs
+            mean_hops = sum_p_hops / pairs
+        else:
+            differ_pct = mean_likely = mean_hops = 0.0
+        print("%-8d%-9d%-13.3f%-10.3f%-7d%-8d%-10.1f%-15.5f%-12.5f"
+              % (n, graph.edge_count, dijkstra_ms, bfs_ms, pairs, differ, differ_pct,
+                 mean_likely, mean_hops))
+        lines.append("%d,%d,%s,%s,%d,%d,%s,%s,%s"
+                     % (n, graph.edge_count, dijkstra_ms, bfs_ms, pairs, differ,
+                        differ_pct, mean_likely, mean_hops))
+    save_csv(folder, "bench_paths.csv", lines)
 
 
-def bench_allocation(out_dir: str) -> None:
-    instances, wards, options, budget = 50, 8, 4, 25
-    rows = ["instance,dp_value,greedy_value,improvement,improvement_pct"]
-    sum_dp = sum_greedy = sum_pct = 0.0
+def bench_allocation(folder):
+    instances = 50
+    num_wards = 8
+    options_per_ward = 4
+    budget = 25
+    lines = ["instance,dp_value,greedy_value,improvement,improvement_pct"]
+    sum_dp = 0.0
+    sum_greedy = 0.0
+    sum_pct = 0.0
     dp_better = 0
     for i in range(instances):
-        w = random_allocation_instance(wards, options, 1000 + i)  # same instance for both methods
-        dp = dp_allocate(w, budget).total_value
-        greedy = greedy_allocate(w, budget).total_value
-        gain = dp - greedy
-        pct = 100.0 * gain / greedy if greedy > 0 else 0.0
-        rows.append(f"{i},{dp},{greedy},{gain},{pct}")
-        sum_dp, sum_greedy, sum_pct = sum_dp + dp, sum_greedy + greedy, sum_pct + pct
-        dp_better += gain > 1e-9
-    print(f"\n[3] DP vs greedy allocation: {instances} random instances, {wards} wards, "
-          f"{options} options, budget {budget}")
-    print(f"{'mean cases averted (DP)':<26}{'mean (greedy)':<14}")
-    print(f"{sum_dp / instances:<26.4f}{sum_greedy / instances:<14.4f}")
-    print(f"mean improvement: {(sum_dp - sum_greedy) / instances:.4f} cases "
-          f"({sum_pct / instances:.2f} % per instance on average); "
-          f"DP strictly better on {dp_better} of {instances}")
-    write_csv(out_dir, "bench_alloc.csv", rows)
+        # Both methods get the SAME random problem.
+        wards = random_allocation_instance(num_wards, options_per_ward, 1000 + i)
+        dp_value = dp_allocate(wards, budget).total_value
+        greedy_value = greedy_allocate(wards, budget).total_value
+        gain = dp_value - greedy_value
+        if greedy_value > 0:
+            gain_pct = 100.0 * gain / greedy_value
+        else:
+            gain_pct = 0.0
+        lines.append("%d,%s,%s,%s,%s" % (i, dp_value, greedy_value, gain, gain_pct))
+        sum_dp += dp_value
+        sum_greedy += greedy_value
+        sum_pct += gain_pct
+        if gain > 1e-9:
+            dp_better += 1
 
-
-def write_csv(out_dir: str, name: str, rows) -> None:
-    with open(os.path.join(out_dir, name), "w") as f:
-        f.write("\n".join(rows) + "\n")
+    print("\n[3] DP vs greedy allocation: %d random instances, %d wards, %d options, budget %d"
+          % (instances, num_wards, options_per_ward, budget))
+    print("%-26s%-14s" % ("mean cases averted (DP)", "mean (greedy)"))
+    print("%-26.4f%-14.4f" % (sum_dp / instances, sum_greedy / instances))
+    print("mean improvement: %.4f cases (%.2f %% per instance on average); "
+          "DP strictly better on %d of %d"
+          % ((sum_dp - sum_greedy) / instances, sum_pct / instances, dp_better, instances))
+    save_csv(folder, "bench_alloc.csv", lines)
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--full", action="store_true", help="also time plain BST at n=100000 (very slow)")
-    ap.add_argument("--out", default="results", help="output directory for CSV files")
-    args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
-    bench_trees(args.out, args.full)
-    bench_paths(args.out)
-    bench_allocation(args.out)
-    print(f"\nCSV files written to {args.out}/")
+    run_full = "--full" in sys.argv
+    folder = "results"
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    bench_trees(folder, run_full)
+    bench_paths(folder)
+    bench_allocation(folder)
+    print("\nCSV files written to %s/" % folder)

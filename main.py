@@ -1,94 +1,136 @@
-"""Run Records -> Unit 1 -> Contact graph -> Unit 2 -> Risk -> Unit 3 -> Plan on a small example.
+"""Run the whole pipeline on a small example and print a report.
+
+    Records -> Unit 1 -> Contact graph -> Unit 2 -> Risk score -> Unit 3 -> Allocation plan
 
 Usage: python3 main.py [path/to/time_series_covid19_confirmed_global.csv]
 """
 import sys
 
-from outbreak.allocation import dp_allocate, discretise_series, greedy_allocate, lcs_similarity
+from outbreak.allocation import (dp_allocate, greedy_allocate, discretise_series,
+                                 lcs_similarity)
 from outbreak.avl_tree import AvlTree
-from outbreak.data_gen import case_series_for_wards, generate_contact_graph, generate_patients
-from outbreak.graph import Graph
+from outbreak.data_gen import (case_series_for_wards, generate_contact_graph,
+                               generate_patients)
 from outbreak.risk import (build_risk_heap, build_ward_options, node_risk,
                            ward_expected_cases, ward_risk)
 
-PATIENTS, WARDS, BUDGET, DAYS, SEED = 40, 5, 12, 21, 42
-INFECTED = [0, 7]
+# Settings for the example.
+NUM_PATIENTS = 40
+NUM_WARDS = 5
+BUDGET = 12            # supply units we can spend in total
+DAYS = 21              # length of each ward's case-count series
+SEED = 42              # same seed = same result every run
+INFECTED = [0, 7]      # patients who are known to be infected
 
 
-def path_text(path):
-    return " -> ".join(map(str, path)) if path else "(no path)"
+def path_to_text(path):
+    """Turn [0, 4, 9] into the text '0 -> 4 -> 9'."""
+    if len(path) == 0:
+        return "(no path)"
+    text = str(path[0])
+    for node in path[1:]:
+        text += " -> " + str(node)
+    return text
 
 
-def main() -> None:
-    csv_path = sys.argv[1] if len(sys.argv) > 1 else "time_series_covid19_confirmed_global.csv"
+def main():
+    if len(sys.argv) > 1:
+        csv_path = sys.argv[1]
+    else:
+        csv_path = "time_series_covid19_confirmed_global.csv"
 
-    # ---- Unit 1: records in an AVL tree ----
-    patients = generate_patients(PATIENTS, WARDS, SEED)
+    # ---- UNIT 1: store the patient records in an AVL tree ----
+    patients = generate_patients(NUM_PATIENTS, NUM_WARDS, SEED)
     records = AvlTree()
-    for p in reversed(patients):  # descending ids: worst case for a plain BST
-        records.insert(p)
+    for i in range(len(patients) - 1, -1, -1):   # insert in DESCENDING id order:
+        records.insert(patients[i])              # a plain BST would become a chain here
     print("== Records ==")
-    print(f"{len(records)} patients stored in AVL tree, height {records.height()}, "
-          f"valid={'yes' if records.validate() else 'NO'}\n")
+    print("%d patients stored in AVL tree, height %d, valid=%s\n"
+          % (len(records), records.height(), "yes" if records.validate() else "NO"))
 
-    # ---- Unit 2: contact graph, exposure levels, clusters ----
-    g = generate_contact_graph(PATIENTS, 3.0, SEED)
-    is_infected = [v in INFECTED for v in range(PATIENTS)]
-    clusters = g.find_clusters()
+    # ---- UNIT 2: contact graph, exposure levels, clusters ----
+    graph = generate_contact_graph(NUM_PATIENTS, 3.0, SEED)
+    is_infected = [False] * NUM_PATIENTS
+    for p in INFECTED:
+        is_infected[p] = True
+
+    clusters = graph.find_clusters()
     print("== Contact graph ==")
-    print(f"{len(g)} nodes, {g.edge_count} contacts, {max(clusters) + 1} clusters. "
-          f"Infected sources: {INFECTED[0]} and {INFECTED[1]}")
-    level = g.bfs_levels(INFECTED[0])
-    print(f"Exposure levels from patient {INFECTED[0]} (hops):")
-    for l in range(1, max(level) + 1):
-        print(f"  level {l}: {level.count(l)} patients")
-    print(f"  unreachable: {level.count(-1)} patients\n")
+    print("%d nodes, %d contacts, %d clusters. Infected sources: %d and %d"
+          % (len(graph), graph.edge_count, max(clusters) + 1, INFECTED[0], INFECTED[1]))
 
-    # ---- Risk glue + heap ----
-    risk = node_risk(g, INFECTED)
+    levels = graph.bfs_levels(INFECTED[0])
+    print("Exposure levels from patient %d (hops):" % INFECTED[0])
+    for level in range(1, max(levels) + 1):
+        print("  level %d: %d patients" % (level, levels.count(level)))
+    print("  unreachable: %d patients\n" % levels.count(-1))
+
+    # ---- Risk score for every patient, then the heap ----
+    risk = node_risk(graph, INFECTED)
     heap = build_risk_heap(risk, is_infected)
     print("== Top 5 critical patients (by exposure risk) ==")
-    print(f"  {'id':<4} {'risk':<6} {'age':<5} {'ward':<5} severity")
+    print("  %-4s %-6s %-5s %-5s %s" % ("id", "risk", "age", "ward", "severity"))
     target = None
-    for k in range(min(5, len(heap))):
-        top = heap.pop()
-        target = top.id if k == 0 else target
-        p = records.search(top.id)
-        print(f"  {top.id:<4} {top.score:<6.3f} {p.age:<5} {p.ward:<5} {p.severity}")
+    shown = 0
+    while shown < 5 and len(heap) > 0:
+        top = heap.pop()                  # always the highest remaining risk
+        if shown == 0:
+            target = top.id               # remember the most at-risk patient
+        patient = records.search(top.id)  # look the full record up in the AVL tree
+        print("  %-4d %-6.3f %-5d %-5d %d"
+              % (top.id, top.score, patient.age, patient.ward, patient.severity))
+        shown += 1
 
-    # ---- Most likely path to the top patient ----
-    print(f"\n== Most likely transmission path to patient {target} ==")
-    results = {s: g.likely_path(s) for s in INFECTED}
-    best_source = min(INFECTED, key=lambda s: results[s].dist[target])
-    likely = Graph.reconstruct_path(results[best_source], best_source, target)
-    hops = g.hop_path(best_source, target)
-    print(f"Likely path (from source {best_source}): {path_text(likely)}")
-    print(f"  probability {g.path_probability(likely):.4f}")
-    print(f"Fewest-hops path:            {path_text(hops)}")
-    print(f"  probability {g.path_probability(hops):.4f}\n")
+    # ---- Most likely transmission path to that patient ----
+    print("\n== Most likely transmission path to patient %d ==" % target)
+    # Run Dijkstra from each infected patient and use the source closest to the target.
+    best_source = INFECTED[0]
+    best_result = graph.likely_path(best_source)
+    for source in INFECTED[1:]:
+        result = graph.likely_path(source)
+        if result.dist[target] < best_result.dist[target]:
+            best_source = source
+            best_result = result
+    likely = graph.reconstruct_path(best_result, best_source, target)
+    hops = graph.hop_path(best_source, target)
+    print("Likely path (from source %d): %s" % (best_source, path_to_text(likely)))
+    print("  probability %.4f" % graph.path_probability(likely))
+    print("Fewest-hops path:            %s" % path_to_text(hops))
+    print("  probability %.4f\n" % graph.path_probability(hops))
 
-    # ---- Unit 3: allocation ----
-    wr = ward_risk(patients, risk, WARDS)
-    expected = ward_expected_cases(patients, risk, is_infected, WARDS)
+    # ---- UNIT 3: allocate the supplies ----
+    ward_scores = ward_risk(patients, risk, NUM_WARDS)
+    expected = ward_expected_cases(patients, risk, is_infected, NUM_WARDS)
     options = build_ward_options(expected)
-    dp, greedy = dp_allocate(options, BUDGET), greedy_allocate(options, BUDGET)
-    print(f"== Allocation plan (budget {BUDGET} units) ==")
-    print(f"  {'ward':<5} {'ward risk':<10} {'expected cases':<15} {'spend':<6} averted")
-    for w in range(WARDS):
-        o = options[w][dp.choice[w]]
-        print(f"  {w:<5} {wr[w]:<10.3f} {expected[w]:<15.3f} {o.cost:<6} {o.value:.3f}")
-    print(f"Total cost {dp.total_cost}, total expected cases averted (DP): {dp.total_value:.3f}")
-    print(f"Greedy baseline averts: {greedy.total_value:.3f}\n")
+    dp_plan = dp_allocate(options, BUDGET)
+    greedy_plan = greedy_allocate(options, BUDGET)
+    print("== Allocation plan (budget %d units) ==" % BUDGET)
+    print("  %-5s %-10s %-15s %-6s %s" % ("ward", "ward risk", "expected cases", "spend", "averted"))
+    for w in range(NUM_WARDS):
+        chosen = options[w][dp_plan.choice[w]]
+        print("  %-5d %-10.3f %-15.3f %-6d %.3f"
+              % (w, ward_scores[w], expected[w], chosen.cost, chosen.value))
+    print("Total cost %d, total expected cases averted (DP): %.3f"
+          % (dp_plan.total_cost, dp_plan.total_value))
+    print("Greedy baseline averts: %.3f\n" % greedy_plan.total_value)
 
-    # ---- LCS: which ward's trend looks like the riskiest ward's trend? ----
-    series, real = case_series_for_wards(csv_path, WARDS, DAYS, SEED)
-    riskiest = max(range(WARDS), key=lambda w: wr[w])
-    ref = discretise_series(series[riskiest])
-    print(f"== Trend similarity ({'real CSV' if real else 'synthetic'} case series) ==")
-    print(f"Ward {riskiest} trend: {ref}")
-    for w in range(WARDS):
-        t = discretise_series(series[w])
-        print(f"  ward {w}: {t}  similarity to ward {riskiest} = {lcs_similarity(ref, t):.2f}")
+    # ---- LCS: which ward's case trend looks like the riskiest ward's trend? ----
+    series, used_real = case_series_for_wards(csv_path, NUM_WARDS, DAYS, SEED)
+    riskiest = 0
+    for w in range(1, NUM_WARDS):
+        if ward_scores[w] > ward_scores[riskiest]:
+            riskiest = w
+    reference = discretise_series(series[riskiest])
+    if used_real:
+        source_name = "real CSV"
+    else:
+        source_name = "synthetic"
+    print("== Trend similarity (%s case series) ==" % source_name)
+    print("Ward %d trend: %s" % (riskiest, reference))
+    for w in range(NUM_WARDS):
+        trend = discretise_series(series[w])
+        print("  ward %d: %s  similarity to ward %d = %.2f"
+              % (w, trend, riskiest, lcs_similarity(reference, trend)))
 
 
 if __name__ == "__main__":

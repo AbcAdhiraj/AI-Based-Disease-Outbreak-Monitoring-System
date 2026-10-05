@@ -1,83 +1,89 @@
 """Unit 1: binary max-heap of (patient id, risk score).
 
-Array layout of a complete binary tree: parent(i) = (i-1)//2, children are 2i+1
-and 2i+2. No pointers are needed because the tree has no gaps.
+A max-heap always keeps the item with the BIGGEST score at the top, so we can
+get the most at-risk patient instantly. It is stored in a plain list that
+represents a "complete" binary tree, level by level:
+    parent of position i  -> (i - 1) // 2
+    children of position i -> 2*i + 1 and 2*i + 2
+Heap rule: every parent has a score >= its children's scores.
 """
-from typing import List, NamedTuple
 
 
-class HeapItem(NamedTuple):
-    id: int
-    score: float
+class HeapItem:
+    def __init__(self, id, score):
+        self.id = id          # patient id
+        self.score = score    # risk score
 
 
 class MaxHeap:
-    def __init__(self) -> None:
-        self._items: List[HeapItem] = []
+    def __init__(self):
+        self.items = []       # the heap, stored as a list
 
-    def __len__(self) -> int:
-        return len(self._items)
+    def __len__(self):
+        return len(self.items)
 
-    @staticmethod
-    def _higher(a: HeapItem, b: HeapItem) -> bool:
-        """Larger score wins; ties go to the smaller id so pop order is deterministic."""
+    def is_higher(self, a, b):
+        """True if item a should be above item b in the heap.
+
+        A bigger score wins. If scores are equal the smaller id wins, which makes
+        the order always the same (useful for repeatable results and tests).
+        """
         if a.score != b.score:
             return a.score > b.score
         return a.id < b.id
 
-    def _sift_up(self, i: int) -> None:
-        """Move item i up until its parent is at least as high. O(log n).
+    def sift_up(self, i):
+        """Move the item at position i up while it beats its parent. Time: O(log n).
 
-        The heap property held everywhere except between i and its parent; each
-        swap fixes that pair and only moves the problem one level up.
+        The heap rule can only be broken between this item and its parent. Each
+        swap fixes that pair, and the item goes up one level, at most log2(n) times.
         """
-        a = self._items
         while i > 0:
             parent = (i - 1) // 2
-            if not self._higher(a[i], a[parent]):
-                break
-            a[i], a[parent] = a[parent], a[i]
-            i = parent
+            if not self.is_higher(self.items[i], self.items[parent]):
+                break                                   # parent is already bigger: done
+            # swap the item with its parent
+            self.items[i], self.items[parent] = self.items[parent], self.items[i]
+            i = parent                                  # continue from the new position
 
-    def _sift_down(self, i: int) -> None:
-        """Move item i down until both children are lower. O(log n).
-
-        Swapping with the HIGHER child keeps the property between that child and
-        its sibling, so only one subtree can still be broken.
-        """
-        a, n = self._items, len(self._items)
+    def sift_down(self, i):
+        """Move the item at position i down until it beats both children. Time: O(log n)."""
+        n = len(self.items)
         while True:
-            best, l, r = i, 2 * i + 1, 2 * i + 2
-            if l < n and self._higher(a[l], a[best]):
-                best = l
-            if r < n and self._higher(a[r], a[best]):
-                best = r
-            if best == i:
-                return
-            a[i], a[best] = a[best], a[i]
-            i = best
+            biggest = i                                 # assume the item is already in place
+            left = 2 * i + 1
+            right = 2 * i + 2
+            if left < n and self.is_higher(self.items[left], self.items[biggest]):
+                biggest = left
+            if right < n and self.is_higher(self.items[right], self.items[biggest]):
+                biggest = right
+            if biggest == i:
+                break                                   # no child is bigger: done
+            # swap with the bigger child (this keeps the rule between the two children)
+            self.items[i], self.items[biggest] = self.items[biggest], self.items[i]
+            i = biggest
 
-    def push(self, pid: int, score: float) -> None:
-        """Insert. O(log n): append at the end (keeps the tree complete), then sift up."""
-        self._items.append(HeapItem(pid, score))
-        self._sift_up(len(self._items) - 1)
+    def push(self, patient_id, score):
+        """Add an item. Time: O(log n).
 
-    def pop(self) -> HeapItem:
-        """Remove and return the maximum. O(log n).
-
-        Move the last item to the root (keeps the tree complete), shrink, sift down.
+        Put it at the end (this keeps the tree complete) and let it climb up.
         """
-        if not self._items:
+        self.items.append(HeapItem(patient_id, score))
+        self.sift_up(len(self.items) - 1)
+
+    def pop(self):
+        """Remove and return the item with the biggest score. Time: O(log n)."""
+        if len(self.items) == 0:
             raise IndexError("pop from empty heap")
-        top = self._items[0]
-        last = self._items.pop()
-        if self._items:
-            self._items[0] = last
-            self._sift_down(0)
+        top = self.items[0]                  # the biggest item is always at the root
+        last = self.items.pop()              # take the last item off the end...
+        if len(self.items) > 0:
+            self.items[0] = last             # ...and put it at the root instead
+            self.sift_down(0)                # then let it sink to its right place
         return top
 
-    def peek(self) -> HeapItem:
-        """Maximum without removing it. O(1): it is always at index 0."""
-        if not self._items:
+    def peek(self):
+        """Look at the biggest item without removing it. Time: O(1)."""
+        if len(self.items) == 0:
             raise IndexError("peek at empty heap")
-        return self._items[0]
+        return self.items[0]

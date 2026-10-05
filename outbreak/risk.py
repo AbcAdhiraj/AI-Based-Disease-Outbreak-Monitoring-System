@@ -1,71 +1,93 @@
-"""Glue between Unit 2 (graph) and Units 1 and 3."""
+"""Glue between the units: graph results -> risk scores -> heap and allocation options."""
 import math
-from typing import List
 
-from .allocation import Option, WardOptions
-from .graph import Graph
+from .allocation import Option
 from .max_heap import MaxHeap
-from .patient import Patient
 
-# MODEL ASSUMPTION: four supply packages per ward with diminishing returns.
-PACKAGE_COSTS = (0, 2, 4, 6)
-PACKAGE_EFFECT = (0.0, 0.40, 0.65, 0.80)  # fraction of expected cases averted
+# MODEL ASSUMPTION: each ward can get one of four supply packages.
+# More spending averts more cases, but with diminishing returns.
+PACKAGE_COSTS = [0, 2, 4, 6]                  # budget units
+PACKAGE_EFFECT = [0.0, 0.40, 0.65, 0.80]      # fraction of expected cases averted
 
 
-def node_risk(g: Graph, infected: List[int]) -> List[float]:
-    """risk(v) = 1 - prod over infected u of (1 - exp(-dist(u, v))).
+def node_risk(graph, infected):
+    """Risk of every patient, given the list of infected patients.
 
-    MODEL ASSUMPTION (not validated epidemiology): Dijkstra's dist(u, v) equals
-    -ln(probability of the best path u->v), so exp(-dist) is that path's
-    probability. "Infection reaches v from u" is that event, and different
-    infected sources are treated as independent, giving the usual "at least one
-    source succeeds" formula. An infected node has dist 0 to itself, a factor
-    (1 - 1) = 0, so its risk is exactly 1.
-    Complexity: one Dijkstra per source, O(k (V + E) log V) for k sources.
+    risk(v) = 1 - product over infected sources u of (1 - exp(-dist(u, v)))
+
+    MODEL ASSUMPTION (not validated epidemiology):
+      * dist(u, v) from Dijkstra is -ln(probability of the best path u -> v),
+        so exp(-dist) is the chance that infection travels from u to v.
+      * (1 - that chance) is the chance source u does NOT infect v.
+      * Treating sources as independent, the chance that NO source infects v is
+        the product of those numbers, and the risk is 1 minus it.
+    An infected patient has distance 0 to itself, so its factor is (1 - 1) = 0
+    and its risk is exactly 1.
+    Time: one Dijkstra per infected source.
     """
-    survive = [1.0] * len(g)  # probability of escaping every source
+    # not_infected[v] = chance that v escapes every source seen so far (starts at 1).
+    not_infected = [1.0] * len(graph)
     for source in infected:
-        dist = g.likely_path(source).dist
-        for v, d in enumerate(dist):
-            reach = 0.0 if math.isinf(d) else math.exp(-d)
-            survive[v] *= 1.0 - reach
-    return [1.0 - s for s in survive]
+        dist = graph.likely_path(source).dist
+        for v in range(len(graph)):
+            if math.isinf(dist[v]):
+                reach = 0.0                   # unreachable: this source cannot infect v
+            else:
+                reach = math.exp(-dist[v])    # chance that infection reaches v
+            not_infected[v] = not_infected[v] * (1.0 - reach)
+
+    risk = []
+    for v in range(len(graph)):
+        risk.append(1.0 - not_infected[v])
+    return risk
 
 
-def ward_risk(patients: List[Patient], risk: List[float], num_wards: int) -> List[float]:
-    """Mean node risk per ward. O(P). The mean is size-independent, so wards compare fairly."""
-    total, count = [0.0] * num_wards, [0] * num_wards
-    for p in patients:
-        total[p.ward] += risk[p.id]
-        count[p.ward] += 1
-    return [t / c if c else 0.0 for t, c in zip(total, count)]
+def ward_risk(patients, risk, num_wards):
+    """Average risk of the patients in each ward (the mean makes wards of
+    different sizes comparable)."""
+    total = [0.0] * num_wards
+    count = [0] * num_wards
+    for patient in patients:
+        total[patient.ward] += risk[patient.id]
+        count[patient.ward] += 1
+    result = []
+    for w in range(num_wards):
+        if count[w] > 0:
+            result.append(total[w] / count[w])
+        else:
+            result.append(0.0)
+    return result
 
 
-def ward_expected_cases(patients: List[Patient], risk: List[float],
-                        is_infected: List[bool], num_wards: int) -> List[float]:
-    """Expected NEW cases per ward: the sum of risks of not-yet-infected patients
-    (linearity of expectation, no independence needed). Infected patients are
-    excluded because their cases cannot be "averted"."""
+def ward_expected_cases(patients, risk, is_infected, num_wards):
+    """Expected number of NEW cases in each ward.
+
+    Adding up each patient's risk gives the expected count. Patients who are
+    already infected are skipped because their cases cannot be averted.
+    """
     expected = [0.0] * num_wards
-    for p in patients:
-        if not is_infected[p.id]:
-            expected[p.ward] += risk[p.id]
+    for patient in patients:
+        if not is_infected[patient.id]:
+            expected[patient.ward] += risk[patient.id]
     return expected
 
 
-def build_risk_heap(risk: List[float], is_infected: List[bool]) -> MaxHeap:
-    """Heap of (patient id, risk) for patients not already infected. O(P log P)."""
+def build_risk_heap(risk, is_infected):
+    """Put (patient id, risk) into a max-heap, skipping already-infected patients."""
     heap = MaxHeap()
-    for v, r in enumerate(risk):
+    for v in range(len(risk)):
         if not is_infected[v]:
-            heap.push(v, r)
+            heap.push(v, risk[v])
     return heap
 
 
-def build_ward_options(expected_cases: List[float]) -> WardOptions:
-    """Packages cost 0/2/4/6 units averting 0/40/65/80 % of a ward's expected cases.
-
-    Diminishing returns is what turns the allocation into a real trade-off.
-    """
-    return [[Option(c, cases * e) for c, e in zip(PACKAGE_COSTS, PACKAGE_EFFECT)]
-            for cases in expected_cases]
+def build_ward_options(expected_cases):
+    """For each ward, create the four packages. A package averts
+    (expected cases of the ward) x (its effect fraction)."""
+    wards = []
+    for cases in expected_cases:
+        options = []
+        for k in range(len(PACKAGE_COSTS)):
+            options.append(Option(PACKAGE_COSTS[k], cases * PACKAGE_EFFECT[k]))
+        wards.append(options)
+    return wards

@@ -1,68 +1,94 @@
-"""Synthetic inputs (seeded, reproducible) plus an optional real-data loader."""
+"""Synthetic (made-up) data for the project, plus an optional real-data loader.
+
+Every function takes a `seed`. The same seed always gives the same data, so
+results can be repeated exactly.
+"""
 import csv
 import os
 import random
-from typing import List, Optional, Tuple
 
-from .allocation import Option, WardOptions
+from .allocation import Option
 from .graph import Graph
 from .patient import Patient
 
 
-def generate_contact_graph(n: int, avg_degree: float, seed: int) -> Graph:
-    """Random graph with about n * avg_degree / 2 distinct undirected edges. O(m).
+def generate_contact_graph(n, avg_degree, seed):
+    """Random contact graph with n nodes and the given average degree.
 
-    Each edge joins two random distinct nodes; a set of used pairs prevents
-    duplicates. Average degree = 2m / n, so we draw m = n * avg_degree / 2 edges
-    (capped at n(n-1)/2). Duration 0.2..6 h and proximity 0.1..1, uniform: model assumptions.
+    Average degree = 2 * (number of edges) / n, so we need n * avg_degree / 2 edges.
+    We repeatedly pick two random different patients and connect them, skipping
+    pairs that are already connected.
+    Contact duration is random in 0.2..6 hours and proximity in 0.1..1 (assumptions).
     """
-    g = Graph(n)
+    graph = Graph(n)
     if n < 2:
-        return g
+        return graph
     rng = random.Random(seed)
-    target = min(n * (n - 1) // 2, int(n * avg_degree / 2))
-    used = set()
-    while len(used) < target:
-        u, v = rng.randrange(n), rng.randrange(n)
+    wanted_edges = int(n * avg_degree / 2)
+    most_possible = n * (n - 1) // 2          # a graph cannot have more edges than this
+    if wanted_edges > most_possible:
+        wanted_edges = most_possible
+
+    used_pairs = set()                        # pairs that already have an edge
+    while len(used_pairs) < wanted_edges:
+        u = rng.randrange(n)
+        v = rng.randrange(n)
         if u == v:
+            continue                          # a patient cannot contact themselves
+        if u < v:
+            pair = (u, v)
+        else:
+            pair = (v, u)                     # (3, 5) and (5, 3) are the same edge
+        if pair in used_pairs:
             continue
-        key = (u, v) if u < v else (v, u)
-        if key in used:
-            continue
-        used.add(key)
-        g.add_edge(u, v, rng.uniform(0.2, 6.0), rng.uniform(0.1, 1.0))
-    return g
+        used_pairs.add(pair)
+        duration = rng.uniform(0.2, 6.0)
+        proximity = rng.uniform(0.1, 1.0)
+        graph.add_edge(u, v, duration, proximity)
+    return graph
 
 
-def generate_patients(n: int, num_wards: int, seed: int) -> List[Patient]:
-    """n patients with id = 0..n-1 (id == graph node index)."""
+def generate_patients(n, num_wards, seed):
+    """n random patients with ids 0..n-1 (the id is also the graph node number)."""
     rng = random.Random(seed)
-    return [Patient(i, rng.randint(1, 90), rng.randrange(num_wards), rng.randint(1, 5))
-            for i in range(n)]
+    patients = []
+    for i in range(n):
+        age = rng.randint(1, 90)
+        ward = rng.randrange(num_wards)
+        severity = rng.randint(1, 5)
+        patients.append(Patient(i, age, ward, severity))
+    return patients
 
 
-def synthetic_case_series(num_wards: int, days: int, seed: int) -> List[List[float]]:
-    """Fake daily case counts: each ward gets a growth rate in [-8%, +12%] per day,
-    +-5% noise, starting from 20..100 cases."""
+def synthetic_case_series(num_wards, days, seed):
+    """Made-up daily case counts, one list per ward.
+
+    Each ward starts at 20..100 cases and changes by its own daily rate
+    (between -8% and +12%) plus a little random noise (+/- 5%).
+    """
     rng = random.Random(seed)
     all_series = []
-    for _ in range(num_wards):
-        value, rate = rng.uniform(20, 100), rng.uniform(-0.08, 0.12)
+    for w in range(num_wards):
+        value = rng.uniform(20, 100)
+        rate = rng.uniform(-0.08, 0.12)
         series = []
-        for _ in range(days):
+        for d in range(days):
             series.append(value)
-            value = max(0.0, value * (1.0 + rate + rng.uniform(-0.05, 0.05)))
+            noise = rng.uniform(-0.05, 0.05)
+            value = value * (1.0 + rate + noise)
+            if value < 0:
+                value = 0.0                   # case counts cannot be negative
         all_series.append(series)
     return all_series
 
 
-def load_jhu_csv(path: str) -> List[List[float]]:
-    """Read a Johns Hopkins CSSE confirmed-cases CSV (time_series_covid19_confirmed_global.csv).
+def load_jhu_csv(path):
+    """Read a Johns Hopkins CSSE file (time_series_covid19_confirmed_global.csv).
 
-    Format: Province/State,Country/Region,Lat,Long,<one column per date>...
-    The first four columns are labels; the rest are cumulative confirmed counts.
-    Returns one cumulative series per row, or [] if the file is missing/unreadable.
-    The csv module handles quoted commas such as "Korea, South".
+    Each row is: Province/State, Country/Region, Lat, Long, then one column per
+    date holding the CUMULATIVE confirmed cases. We return one list of numbers per
+    row, or [] if the file does not exist or cannot be read.
+    (The csv module is used because names like "Korea, South" contain commas.)
     """
     if not os.path.isfile(path):
         return []
@@ -70,42 +96,65 @@ def load_jhu_csv(path: str) -> List[List[float]]:
     try:
         with open(path, newline="") as f:
             reader = csv.reader(f)
-            next(reader, None)  # header
+            next(reader, None)                # skip the header line
             for fields in reader:
-                if len(fields) > 4:
-                    rows.append([float(x) if x else 0.0 for x in fields[4:]])
+                if len(fields) <= 4:
+                    continue                  # no date columns: skip
+                numbers = []
+                for text in fields[4:]:       # the first 4 columns are labels
+                    if text == "":
+                        numbers.append(0.0)
+                    else:
+                        numbers.append(float(text))
+                rows.append(numbers)
     except (OSError, ValueError):
-        return []
+        return []                             # unreadable or malformed file
     return rows
 
 
-def case_series_for_wards(path: str, num_wards: int, days: int,
-                          seed: int) -> Tuple[List[List[float]], bool]:
-    """Ward trend data: (series, used_real_data).
+def case_series_for_wards(path, num_wards, days, seed):
+    """Daily case series for each ward. Returns (series, used_real_data).
 
-    Uses the first `num_wards` CSV rows (last `days` days) if the file loads and
-    is big enough, converting cumulative totals to daily new cases (negative
-    corrections clamp to 0). Otherwise falls back to synthetic series.
+    If the CSV exists and has enough rows and days we use it, converting the
+    cumulative totals into daily NEW cases (today minus yesterday, never below 0).
+    Otherwise we fall back to synthetic data.
     """
     rows = load_jhu_csv(path)
-    if len(rows) < num_wards or any(len(r) <= days for r in rows[:num_wards]):
+    enough = len(rows) >= num_wards
+    if enough:
+        for w in range(num_wards):
+            if len(rows[w]) <= days:
+                enough = False                # this row has too few days
+    if not enough:
         return synthetic_case_series(num_wards, days, seed), False
-    out = []
-    for cum in rows[:num_wards]:
-        n = len(cum)
-        out.append([max(0.0, cum[t] - cum[t - 1]) for t in range(n - days, n)])
-    return out, True
+
+    series = []
+    for w in range(num_wards):
+        cumulative = rows[w]
+        daily = []
+        for t in range(len(cumulative) - days, len(cumulative)):   # the last `days` days
+            new_cases = cumulative[t] - cumulative[t - 1]
+            if new_cases < 0:
+                new_cases = 0.0               # corrections in the data can go negative
+            daily.append(new_cases)
+        series.append(daily)
+    return series, True
 
 
-def random_allocation_instance(num_wards: int, options_per_ward: int, seed: int) -> WardOptions:
-    """Random knapsack instance: every ward has (0,0) plus options with increasing
-    cost (+1..4 each step) and value (+0.5..6 each step), so bigger packages avert more."""
+def random_allocation_instance(num_wards, options_per_ward, seed):
+    """A random knapsack problem for tests and benchmarks.
+
+    Every ward gets Option(0, 0) first, then more options where both cost and
+    value increase step by step (so bigger packages avert more cases).
+    """
     rng = random.Random(seed)
     wards = []
-    for _ in range(num_wards):
+    for w in range(num_wards):
         options = [Option(0, 0.0)]
-        for _ in range(1, options_per_ward):
+        for k in range(1, options_per_ward):
             last = options[-1]
-            options.append(Option(last.cost + rng.randint(1, 4), last.value + rng.uniform(0.5, 6.0)))
+            new_cost = last.cost + rng.randint(1, 4)
+            new_value = last.value + rng.uniform(0.5, 6.0)
+            options.append(Option(new_cost, new_value))
         wards.append(options)
     return wards

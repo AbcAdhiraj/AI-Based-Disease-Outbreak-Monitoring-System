@@ -10,6 +10,9 @@ A Python 3 PBL project (standard library only, no dependencies) that answers thr
 Records -> Unit 1 -> Contact graph -> Unit 2 -> Risk score -> Unit 3 -> Allocation plan
 ```
 
+The code is written to be easy to read: plain classes and loops, no advanced Python features,
+and a comment on each step explaining why it is there.
+
 The AVL tree, the heap, the graph algorithms and the DP are written by hand. `heapq` is used
 only inside Dijkstra.
 
@@ -18,11 +21,11 @@ only inside Dijkstra.
 | Concept | File | Function / class |
 |---|---|---|
 | AVL tree (insert, delete, search) | `outbreak/avl_tree.py` | `AvlTree.insert`, `remove`, `search` |
-| AVL rotations LL, RR, LR, RL | `outbreak/avl_tree.py` | `rotate_ll`, `rotate_rr`, `rotate_lr`, `rotate_rl`, `_rebalance` |
+| AVL rotations LL, RR, LR, RL | `outbreak/avl_tree.py` | `rotate_ll`, `rotate_rr`, `rotate_lr`, `rotate_rl`, `rebalance` |
 | In-order traversal, range query | `outbreak/avl_tree.py` | `AvlTree.inorder`, `range` |
 | Balance / BST-order self-check | `outbreak/avl_tree.py` | `AvlTree.validate` |
 | Unbalanced BST (benchmark baseline) | `outbreak/bst_baseline.py` | `BstBaseline` |
-| Binary max-heap (priority queue) | `outbreak/max_heap.py` | `MaxHeap.push`, `pop`, `peek`, `_sift_up`, `_sift_down` |
+| Binary max-heap (priority queue) | `outbreak/max_heap.py` | `MaxHeap.push`, `pop`, `peek`, `sift_up`, `sift_down` |
 | Adjacency-list graph, edge weights | `outbreak/graph.py` | `Graph.add_edge`, `transmission_probability` |
 | BFS exposure levels | `outbreak/graph.py` | `Graph.bfs_levels` |
 | DFS clusters (connected components) | `outbreak/graph.py` | `Graph.find_clusters` |
@@ -78,7 +81,8 @@ Use `--full` to measure it.
 - `patient id == graph node index`, which links the three units without a lookup table.
 - The DP needs a `(0, 0)` option in each ward to allow "no supplies"; costs are integers.
 - The greedy baseline never upgrades a ward's package. That is the weakness the DP fixes.
-- `BstBaseline` is fully iterative so a degenerate tree does not hit Python's recursion limit.
+- `BstBaseline` insert, search, traversal and height use loops, not recursion, so a 100000-deep chain does
+  not hit Python's recursion limit. Its `remove` is recursive and only meant for small trees.
   The AVL tree uses recursion, which is safe because its depth is O(log n).
 - The random graph connects uniformly random pairs, so it has no community structure.
 - Python is much slower than compiled code. Compare the methods with each other, not with
@@ -159,20 +163,20 @@ Ward 0 trend: DDDDFDDDDDDDDDDDFDFD
   ward 4: FFRFRFFFFFFFFFFFFFFF  similarity to ward 0 = 0.15
 ```
 
-### Benchmarks: `python3 benchmarks.py` (mean of 5 runs, about 67 s total)
+### Benchmarks: `python3 benchmarks.py` (mean of 5 runs, about 1 minute total)
 
 ```text
 [1] AVL vs plain BST, sorted insertions (mean of 5 runs)
 n       AVL height  BST height  AVL ms        BST ms        
-1000    10          1000        6.242         36.265        
-10000   14          10000       79.155        3828.646      
-100000  17          skipped     1036.156      skipped       
+1000    10          1000        4.202         23.832        
+10000   14          10000       53.117        2407.025      
+100000  17          skipped     740.784       skipped       
 
 [2] Dijkstra (most likely) vs BFS (fewest hops), average degree 6
 nodes   edges    dijkstra ms  bfs ms    pairs  differ  differ %  mean p likely  mean p hops 
-1000    3000     2.432        0.401     200    165     82.5      0.06864        0.03024     
-10000   30000    57.073       21.069    200    182     91.0      0.02324        0.00843     
-100000  300000   863.926      262.875   200    182     91.0      0.01034        0.00326     
+1000    3000     1.855        0.396     200    165     82.5      0.06864        0.03024     
+10000   30000    66.819       21.178    200    182     91.0      0.02324        0.00843     
+100000  300000   918.158      295.715   200    182     91.0      0.01034        0.00326     
 
 [3] DP vs greedy allocation: 50 random instances, 8 wards, 4 options, budget 25
 mean cases averted (DP)   mean (greedy) 
@@ -183,12 +187,12 @@ mean improvement: 5.0969 cases (12.97 % per instance on average); DP strictly be
 What the benchmarks show:
 
 - **AVL vs BST.** On sorted input the plain BST degenerates into a list (height equals n) while the AVL
-  height stays logarithmic (10, 14, 17). At n = 10,000 the BST was about 48 times slower.
+  height stays logarithmic (10, 14, 17). At n = 10,000 the BST was about 45 times slower.
   The BST at n = 100,000 is `skipped`: it is about 5 x 10^9 steps in pure Python. Run
   `python3 benchmarks.py --full` to measure it.
 - **Likely path vs fewest hops.** The two paths differ for 82-91 % of the sampled pairs (200 random
   source/target pairs per size, pairs in different components dropped). The most likely path has roughly
-  2-3 times the probability of the fewest-hops path, at about 3-6 times the runtime of a BFS.
+  2-3 times the probability of the fewest-hops path, at about 3-5 times the runtime of a BFS.
   This depends on the synthetic edge probabilities, so it describes this model, not real outbreaks.
 - **DP vs greedy.** DP averts a mean of 46.09 cases against 41.00 for greedy (+5.10, about 13 % per
   instance), and is strictly better on 47 of 50 instances. On the other 3 they tie.
@@ -206,18 +210,22 @@ Record type shared by all units.
 ```python
 """The record stored in the AVL tree (Unit 1).
 
-A patient's id is also the patient's node index in the contact graph, so the same
-number links all three units together.
+A patient's id is also the patient's node number in the contact graph,
+so the same number links all three units together.
 """
-from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
 class Patient:
-    id: int        # unique key, 0 <= id < number of graph nodes
-    age: int       # years
-    ward: int      # ward number, 0 <= ward < number of wards
-    severity: int  # 1 (mild) .. 5 (critical)
+    def __init__(self, id, age, ward, severity):
+        self.id = id              # unique key, 0 <= id < number of graph nodes
+        self.age = age            # age in years
+        self.ward = ward          # ward number, 0 <= ward < number of wards
+        self.severity = severity  # 1 (mild) up to 5 (critical)
+
+    def __repr__(self):
+        # Only used when printing a Patient while debugging.
+        return "Patient(id=%d, age=%d, ward=%d, severity=%d)" % (
+            self.id, self.age, self.ward, self.severity)
 ```
 
 ### `outbreak/avl_tree.py`
@@ -225,243 +233,307 @@ class Patient:
 Unit 1: AVL tree with the four rotations, delete, range query and `validate()`.
 
 ```python
-"""Unit 1: self-balancing binary search tree keyed on patient id."""
-from typing import List, Optional
+"""Unit 1: AVL tree (a self-balancing binary search tree) keyed on patient id.
 
-from .patient import Patient
-
-
-class _Node:
-    __slots__ = ("data", "height", "left", "right")
-
-    def __init__(self, data: Patient):
-        self.data = data
-        self.height = 1          # cached height: a leaf has height 1
-        self.left: Optional["_Node"] = None
-        self.right: Optional["_Node"] = None
+Idea: a normal BST can become a long chain if keys arrive in sorted order, which
+makes search slow (O(n)). An AVL tree fixes this by keeping the heights of the two
+subtrees of EVERY node within 1 of each other. It does that with "rotations".
+That keeps the tree height about log2(n), so insert/search/delete are O(log n).
+"""
 
 
-def _h(n: Optional[_Node]) -> int:
-    return n.height if n else 0
+class Node:
+    def __init__(self, patient):
+        self.data = patient   # the Patient record stored here
+        self.height = 1       # height of the subtree rooted here (a leaf has height 1)
+        self.left = None      # left child (smaller ids)
+        self.right = None     # right child (larger ids)
 
 
-def _update_height(n: _Node) -> None:
-    """Recompute the cached height from the children. O(1).
+def height_of(node):
+    """Height of a subtree; an empty subtree (None) has height 0."""
+    if node is None:
+        return 0
+    return node.height
 
-    Must be called bottom-up, after the children are already correct.
+
+def update_height(node):
+    """Recompute node.height from its two children.  Time: O(1).
+
+    A node is one level taller than its taller child.
+    Call this only after the children's heights are already correct.
     """
-    n.height = 1 + max(_h(n.left), _h(n.right))
+    left_h = height_of(node.left)
+    right_h = height_of(node.right)
+    if left_h > right_h:
+        node.height = 1 + left_h
+    else:
+        node.height = 1 + right_h
 
 
-def _balance_factor(n: Optional[_Node]) -> int:
-    """height(left) - height(right). AVL invariant: always -1, 0 or +1 (positive = left-heavy)."""
-    return _h(n.left) - _h(n.right) if n else 0
+def balance_factor(node):
+    """height(left) - height(right).  An AVL tree keeps this at -1, 0 or +1.
 
-
-def rotate_ll(z: _Node) -> _Node:
-    """LL case (left child too tall on its left side): rotate right around z.
-
-            z              y
-           / \\           /   \\
-          y   C   ==>   x     z
-         / \\                 / \\
-        x   B               B   C
-
-    Purpose: lift y over z. Complexity O(1).
-    Why it works: every key in B lies between y and z, so B can become z's left
-    child without breaking BST order, and the tall side (x) rises one level.
+    Positive means the left side is taller, negative means the right is taller.
     """
-    y = z.left
-    z.left = y.right
-    y.right = z
-    _update_height(z)  # z is now lower than y, so fix z first
-    _update_height(y)
+    if node is None:
+        return 0
+    return height_of(node.left) - height_of(node.right)
+
+
+# ---------------------------------------------------------------------------
+# The four rotations. Each takes the unbalanced node "z" and returns the node
+# that becomes the new root of that part of the tree. All are O(1).
+# A rotation only moves a few pointers, and it never changes the left-to-right
+# (sorted) order of the keys, so the tree is still a valid BST afterwards.
+# ---------------------------------------------------------------------------
+
+def rotate_ll(z):
+    """LL case: the left child's LEFT side is too tall -> one right rotation.
+
+              z                 y
+             / \\              /   \\
+            y   C     ==>     x     z
+           / \\                    / \\
+          x   B                  B   C
+
+    y moves up and z moves down to be y's right child.
+    B holds keys bigger than y but smaller than z, so it fits as z's left child.
+    """
+    y = z.left          # y will become the new top node
+    z.left = y.right    # B moves from y's right to z's left
+    y.right = z         # z becomes y's right child
+    update_height(z)    # z is now lower than y, so fix z's height first...
+    update_height(y)    # ...and then y's height
     return y
 
 
-def rotate_rr(z: _Node) -> _Node:
-    """RR case: mirror image of LL. Rotate left around z. O(1), same order argument."""
-    y = z.right
-    z.right = y.left
-    y.left = z
-    _update_height(z)
-    _update_height(y)
+def rotate_rr(z):
+    """RR case: the right child's RIGHT side is too tall -> one left rotation.
+
+    This is the mirror image of rotate_ll.
+    """
+    y = z.right         # y will become the new top node
+    z.right = y.left    # y's left subtree moves to z's right
+    y.left = z          # z becomes y's left child
+    update_height(z)
+    update_height(y)
     return y
 
 
-def rotate_lr(z: _Node) -> _Node:
-    """LR case (left child too tall on its RIGHT side). O(1).
+def rotate_lr(z):
+    """LR case: the left child's RIGHT side is too tall -> two rotations.
 
-    One right rotation would leave the tall part still too tall, so first turn the
-    zig-zag into a straight line (left rotation on the left child), then apply LL.
+    A single right rotation would not help (the tall part would just move
+    over), so first rotate the left child to the left. That turns the zig-zag
+    into a straight line (the LL case), then we do the LL rotation.
     """
-    z.left = rotate_rr(z.left)
-    return rotate_ll(z)
+    z.left = rotate_rr(z.left)   # step 1: rotate the left child left
+    return rotate_ll(z)          # step 2: now it is the LL case
 
 
-def rotate_rl(z: _Node) -> _Node:
-    """RL case: mirror of LR. Right-rotate the right child, then apply RR. O(1)."""
-    z.right = rotate_ll(z.right)
-    return rotate_rr(z)
+def rotate_rl(z):
+    """RL case: the right child's LEFT side is too tall -> two rotations.
 
-
-def _rebalance(n: _Node) -> _Node:
-    """Restore the AVL property at n after one insert/delete below it. O(1).
-
-    Why it works: a single insert/delete changes a subtree height by at most 1,
-    so a node can only become off by exactly 2. The signs of the balance factors
-    tell us which of the four shapes we are in. ">= 0" / "<= 0" on the child also
-    covers the delete-only case where the child is balanced (single rotation).
+    Mirror image of rotate_lr.
     """
-    _update_height(n)
-    bf = _balance_factor(n)
-    if bf > 1:
-        return rotate_ll(n) if _balance_factor(n.left) >= 0 else rotate_lr(n)
-    if bf < -1:
-        return rotate_rr(n) if _balance_factor(n.right) <= 0 else rotate_rl(n)
-    return n
+    z.right = rotate_ll(z.right)  # step 1: rotate the right child right
+    return rotate_rr(z)           # step 2: now it is the RR case
+
+
+def rebalance(node):
+    """Fix the node if it became unbalanced; return the (new) top node. O(1).
+
+    One insert or delete changes a subtree height by at most 1, so a node can
+    only be out of balance by exactly 2. The sign of the balance factors
+    tells us which of the four cases we are in.
+    """
+    update_height(node)
+    bf = balance_factor(node)
+
+    if bf > 1:                              # left side is too tall
+        if balance_factor(node.left) >= 0:
+            return rotate_ll(node)          # tall part is on the outer (left-left) side
+        return rotate_lr(node)              # tall part is on the inner (left-right) side
+
+    if bf < -1:                             # right side is too tall
+        if balance_factor(node.right) <= 0:
+            return rotate_rr(node)          # outer (right-right) side
+        return rotate_rl(node)              # inner (right-left) side
+
+    return node                             # already balanced, nothing to do
 
 
 class AvlTree:
-    def __init__(self) -> None:
-        self._root: Optional[_Node] = None
-        self._count = 0
+    def __init__(self):
+        self.root = None        # the top node of the tree (None = empty tree)
+        self.count = 0          # how many patients are stored
+        self.found_flag = False  # helper flag set by insert/remove (see below)
 
-    def __len__(self) -> int:
-        return self._count
+    def __len__(self):
+        return self.count
 
-    def insert(self, p: Patient) -> bool:
-        """Insert a record; True if the id is new, False if it replaced an existing record.
+    # ------------------------------------------------------------ insert
+    def insert(self, patient):
+        """Add a patient. Returns True if the id was new, False if it replaced one.
 
-        Complexity O(log n): the tree height is at most ~1.44 log2(n) and each
-        rebalance is O(1). Why it works: only nodes on the insertion path change
-        height, and _rebalance is applied to each of them bottom-up.
+        Time: O(log n). We walk down like a normal BST insert, then on the way
+        back up we call rebalance() on each node we passed. Only nodes on that
+        path can have changed height, so those are the only ones to check.
         """
-        inserted = [False]
+        self.found_flag = False                       # becomes True if the id is new
+        self.root = self._insert(self.root, patient)  # the root may change after rotations
+        if self.found_flag:
+            self.count += 1
+        return self.found_flag
 
-        def go(n: Optional[_Node]) -> _Node:
-            if n is None:
-                inserted[0] = True
-                return _Node(p)
-            if p.id < n.data.id:
-                n.left = go(n.left)
-            elif p.id > n.data.id:
-                n.right = go(n.right)
-            else:
-                n.data = p
-                return n
-            return _rebalance(n)
+    def _insert(self, node, patient):
+        if node is None:
+            self.found_flag = True        # we reached an empty spot: this id is new
+            return Node(patient)
 
-        self._root = go(self._root)
-        if inserted[0]:
-            self._count += 1
-        return inserted[0]
+        if patient.id < node.data.id:
+            node.left = self._insert(node.left, patient)    # smaller ids go left
+        elif patient.id > node.data.id:
+            node.right = self._insert(node.right, patient)  # bigger ids go right
+        else:
+            node.data = patient           # same id already exists: replace the record
+            return node
 
-    def remove(self, pid: int) -> bool:
-        """Delete a key; True if it was present. O(log n).
+        return rebalance(node)            # fix this node on the way back up
 
-        A node with two children is replaced by its in-order successor (smallest
-        key of the right subtree), which keeps BST order; then the path back up
-        is rebalanced.
+    # ------------------------------------------------------------ remove
+    def remove(self, patient_id):
+        """Delete the patient with this id. Returns True if it was present.
+
+        Time: O(log n). Same idea as insert: delete like a normal BST, then
+        rebalance every node on the path back up.
         """
-        removed = [False]
+        self.found_flag = False                          # becomes True if we delete something
+        self.root = self._remove(self.root, patient_id)
+        if self.found_flag:
+            self.count -= 1
+        return self.found_flag
 
-        def go(n: Optional[_Node], key: int) -> Optional[_Node]:
-            if n is None:
-                return None
-            if key < n.data.id:
-                n.left = go(n.left, key)
-            elif key > n.data.id:
-                n.right = go(n.right, key)
+    def _remove(self, node, patient_id):
+        if node is None:
+            return None                   # id not in the tree
+
+        if patient_id < node.data.id:
+            node.left = self._remove(node.left, patient_id)
+        elif patient_id > node.data.id:
+            node.right = self._remove(node.right, patient_id)
+        else:
+            # We found the node to delete.
+            self.found_flag = True
+            if node.left is None:
+                return node.right         # 0 or 1 child: the child takes its place
+            if node.right is None:
+                return node.left
+            # Two children: copy in the next-larger record (the smallest node
+            # of the right subtree), then delete that smaller node instead.
+            # This keeps the sorted order correct.
+            smallest = node.right
+            while smallest.left is not None:
+                smallest = smallest.left
+            node.data = smallest.data
+            saved_flag = self.found_flag
+            node.right = self._remove(node.right, smallest.data.id)
+            self.found_flag = saved_flag  # the inner call's result must not overwrite ours
+
+        return rebalance(node)
+
+    # ------------------------------------------------------------ search
+    def search(self, patient_id):
+        """Return the Patient with this id, or None. Time: O(log n).
+
+        At every node we compare and throw away one whole side of the tree,
+        and a balanced tree has only about log2(n) levels.
+        """
+        node = self.root
+        while node is not None:
+            if patient_id == node.data.id:
+                return node.data
+            if patient_id < node.data.id:
+                node = node.left     # the id can only be in the left part
             else:
-                removed[0] = True
-                if n.left is None or n.right is None:
-                    return n.left or n.right  # splice out; nothing to rebalance here
-                succ = n.right
-                while succ.left:
-                    succ = succ.left
-                n.data = succ.data
-                n.right = go(n.right, succ.data.id)
-            return _rebalance(n)
-
-        self._root = go(self._root, pid)
-        if removed[0]:
-            self._count -= 1
-        return removed[0]
-
-    def search(self, pid: int) -> Optional[Patient]:
-        """Find a record or return None. O(log n): each step discards half the tree."""
-        n = self._root
-        while n:
-            if pid == n.data.id:
-                return n.data
-            n = n.left if pid < n.data.id else n.right
+                node = node.right    # the id can only be in the right part
         return None
 
-    def inorder(self) -> List[Patient]:
-        """All records sorted by id. O(n). Left subtree < node < right subtree, so
-        left-node-right visits keys in order."""
-        out: List[Patient] = []
+    # --------------------------------------------------------- traversal
+    def inorder(self):
+        """List of all patients sorted by id. Time: O(n).
 
-        def go(n: Optional[_Node]) -> None:
-            if n:
-                go(n.left)
-                out.append(n.data)
-                go(n.right)
-
-        go(self._root)
-        return out
-
-    def range(self, lo: int, hi: int) -> List[Patient]:
-        """Records with lo <= id <= hi, sorted. O(log n + k) for k results.
-
-        We skip the left subtree when node.id <= lo (everything there is smaller)
-        and the right subtree when node.id >= hi, so only boundary paths and hits
-        are visited.
+        In a BST everything in the left subtree is smaller than the node and
+        everything in the right is bigger, so "left, node, right" gives sorted order.
         """
-        out: List[Patient] = []
+        result = []
+        self._inorder(self.root, result)
+        return result
 
-        def go(n: Optional[_Node]) -> None:
-            if n is None:
-                return
-            if lo < n.data.id:
-                go(n.left)
-            if lo <= n.data.id <= hi:
-                out.append(n.data)
-            if n.data.id < hi:
-                go(n.right)
+    def _inorder(self, node, result):
+        if node is None:
+            return
+        self._inorder(node.left, result)    # 1. everything smaller
+        result.append(node.data)            # 2. this node
+        self._inorder(node.right, result)   # 3. everything bigger
 
-        go(self._root)
-        return out
+    def range(self, low, high):
+        """All patients with low <= id <= high, sorted. Time: O(log n + k) for k results.
 
-    def height(self) -> int:
-        """Empty tree = 0, single node = 1. O(1) thanks to the cached height."""
-        return _h(self._root)
-
-    def root_id(self) -> int:
-        """Id at the root, -1 if empty (used by tests to observe rotations)."""
-        return self._root.data.id if self._root else -1
-
-    def validate(self) -> bool:
-        """Self-check, O(n): sorted order, correct cached heights, |balance factor| <= 1.
-
-        Each node's key must lie strictly inside the (lo, hi) window inherited from
-        its ancestors; that proves the whole tree is sorted.
+        Same as inorder, but we skip a side when nothing there can be in range.
         """
-        def go(n: Optional[_Node], lo: float, hi: float):
-            if n is None:
-                return 0
-            if not (lo < n.data.id < hi):
-                return None
-            hl = go(n.left, lo, n.data.id)
-            hr = go(n.right, n.data.id, hi)
-            if hl is None or hr is None:
-                return None
-            if n.height != 1 + max(hl, hr) or abs(hl - hr) > 1:
-                return None
-            return n.height
+        result = []
+        self._range(self.root, low, high, result)
+        return result
 
-        return go(self._root, float("-inf"), float("inf")) is not None
+    def _range(self, node, low, high, result):
+        if node is None:
+            return
+        if low < node.data.id:                  # the left side may hold ids >= low
+            self._range(node.left, low, high, result)
+        if low <= node.data.id <= high:         # this node is in range
+            result.append(node.data)
+        if node.data.id < high:                 # the right side may hold ids <= high
+            self._range(node.right, low, high, result)
+
+    # ----------------------------------------------------------- helpers
+    def height(self):
+        """Height of the whole tree (empty = 0, one node = 1). O(1): it is cached."""
+        return height_of(self.root)
+
+    def root_id(self):
+        """Id stored at the root, or -1 if empty. Used by tests to see rotations."""
+        if self.root is None:
+            return -1
+        return self.root.data.id
+
+    def validate(self):
+        """Check the tree is a correct AVL tree. Returns True/False. Time: O(n).
+
+        For every node we check: (1) its id is between the limits given by its
+        ancestors (this proves the order is sorted), (2) its stored height is
+        right, (3) the balance factor is -1, 0 or +1.
+        """
+        result = self._check(self.root, float("-inf"), float("inf"))
+        return result != -1
+
+    def _check(self, node, low, high):
+        """Returns the true height of the subtree, or -1 if something is wrong."""
+        if node is None:
+            return 0
+        if not (low < node.data.id < high):
+            return -1                                   # order violated
+        left_h = self._check(node.left, low, node.data.id)    # left ids must be < this id
+        right_h = self._check(node.right, node.data.id, high)  # right ids must be > this id
+        if left_h == -1 or right_h == -1:
+            return -1                                   # a problem deeper down
+        if left_h - right_h > 1 or right_h - left_h > 1:
+            return -1                                   # not balanced
+        real_height = 1 + max(left_h, right_h)
+        if node.height != real_height:
+            return -1                                   # cached height is wrong
+        return real_height
 ```
 
 ### `outbreak/bst_baseline.py`
@@ -469,122 +541,158 @@ class AvlTree:
 Unit 1: unbalanced BST, used only as the benchmark baseline.
 
 ```python
-"""Plain, UNBALANCED binary search tree: benchmark baseline only.
+"""A plain, UNBALANCED binary search tree. Used only as a benchmark baseline.
 
-Same interface as AvlTree but no rebalancing. Sorted input turns it into a linked
-list (height n), which is exactly what the benchmark shows. Everything is iterative:
-a recursive version would hit Python's recursion limit on a degenerate tree.
+It has the same functions as AvlTree but never rebalances. If ids arrive in
+sorted order every new node goes to the right of the previous one, so the tree
+becomes a chain of height n and every insert/search takes O(n).
 """
-from typing import List, Optional
-
-from .patient import Patient
 
 
-class _Node:
-    __slots__ = ("data", "left", "right")
-
-    def __init__(self, data: Patient):
-        self.data = data
-        self.left: Optional["_Node"] = None
-        self.right: Optional["_Node"] = None
+class BstNode:
+    def __init__(self, patient):
+        self.data = patient
+        self.left = None
+        self.right = None
 
 
 class BstBaseline:
-    def __init__(self) -> None:
-        self._root: Optional[_Node] = None
-        self._count = 0
+    def __init__(self):
+        self.root = None
+        self.count = 0
+        self.removed = False   # helper flag used by remove()
 
-    def __len__(self) -> int:
-        return self._count
+    def __len__(self):
+        return self.count
 
-    def insert(self, p: Patient) -> bool:
-        """Standard BST insert. O(h) for tree height h.
+    def insert(self, patient):
+        """Add a patient. True if the id is new, False if it replaced a record.
 
-        h is ~log n for random input but n for sorted input -> O(n) per insert and
-        O(n^2) for n sorted inserts. That is the weakness the AVL tree fixes.
+        Time: O(h) where h is the tree height. h is about log n for random
+        input but n for sorted input, so n sorted inserts cost O(n^2) in total.
+        We use a loop (not recursion) so a tree 100000 levels deep is no problem.
         """
-        if self._root is None:
-            self._root = _Node(p)
-            self._count += 1
+        if self.root is None:                  # empty tree: the new node is the root
+            self.root = BstNode(patient)
+            self.count += 1
             return True
-        n = self._root
+
+        current = self.root
         while True:
-            if p.id == n.data.id:
-                n.data = p
+            if patient.id == current.data.id:  # id already stored: replace the record
+                current.data = patient
                 return False
-            side = "left" if p.id < n.data.id else "right"
-            child = getattr(n, side)
-            if child is None:
-                setattr(n, side, _Node(p))
-                self._count += 1
-                return True
-            n = child
+            if patient.id < current.data.id:   # go left
+                if current.left is None:       # free spot found: attach the new node
+                    current.left = BstNode(patient)
+                    self.count += 1
+                    return True
+                current = current.left
+            else:                              # go right
+                if current.right is None:
+                    current.right = BstNode(patient)
+                    self.count += 1
+                    return True
+                current = current.right
 
-    def remove(self, pid: int) -> bool:
-        """Delete a key. O(h). Same trick as AVL (two children -> in-order successor), no rebalancing."""
-        parent, n = None, self._root
-        while n and n.data.id != pid:
-            parent, n = n, (n.left if pid < n.data.id else n.right)
-        if n is None:
-            return False
-        if n.left and n.right:  # copy successor's record here, then delete the successor node
-            sp, s = n, n.right
-            while s.left:
-                sp, s = s, s.left
-            n.data = s.data
-            parent, n = sp, s
-        child = n.left or n.right  # n now has at most one child
-        if parent is None:
-            self._root = child
-        elif parent.left is n:
-            parent.left = child
+    def remove(self, patient_id):
+        """Delete a patient. True if it was present. Time: O(h).
+
+        Recursive, so only use it on small trees (a 100000-deep chain would
+        overflow Python's recursion limit). The benchmarks never call it.
+        """
+        self.removed = False
+        self.root = self._remove(self.root, patient_id)
+        if self.removed:
+            self.count -= 1
+        return self.removed
+
+    def _remove(self, node, patient_id):
+        if node is None:
+            return None
+        if patient_id < node.data.id:
+            node.left = self._remove(node.left, patient_id)
+        elif patient_id > node.data.id:
+            node.right = self._remove(node.right, patient_id)
         else:
-            parent.right = child
-        self._count -= 1
-        return True
+            self.removed = True
+            if node.left is None:      # 0 or 1 child: the child takes its place
+                return node.right
+            if node.right is None:
+                return node.left
+            # Two children: copy the next-larger record here, delete that node instead.
+            smallest = node.right
+            while smallest.left is not None:
+                smallest = smallest.left
+            node.data = smallest.data
+            keep = self.removed
+            node.right = self._remove(node.right, smallest.data.id)
+            self.removed = keep
+        return node
 
-    def search(self, pid: int) -> Optional[Patient]:
-        """Find a record. O(h)."""
-        n = self._root
-        while n:
-            if pid == n.data.id:
-                return n.data
-            n = n.left if pid < n.data.id else n.right
+    def search(self, patient_id):
+        """Return the Patient with this id or None. Time: O(h)."""
+        node = self.root
+        while node is not None:
+            if patient_id == node.data.id:
+                return node.data
+            if patient_id < node.data.id:
+                node = node.left
+            else:
+                node = node.right
         return None
 
-    def inorder(self) -> List[Patient]:
-        """Sorted records with an explicit stack. O(n).
+    def inorder(self):
+        """All patients sorted by id. Time: O(n).
 
-        Push the whole left spine; a pop visits the smallest unvisited key, then we
-        continue with that node's right subtree.
+        Uses a stack instead of recursion. We go as far left as possible
+        (remembering the nodes on the way), visit a node, then do the same in its
+        right subtree. That visits the nodes in sorted order.
         """
-        out, stack, cur = [], [], self._root
-        while cur or stack:
-            while cur:
-                stack.append(cur)
-                cur = cur.left
-            cur = stack.pop()
-            out.append(cur.data)
-            cur = cur.right
-        return out
+        result = []
+        stack = []
+        node = self.root
+        while node is not None or len(stack) > 0:
+            while node is not None:        # go left as far as possible
+                stack.append(node)
+                node = node.left
+            node = stack.pop()             # the smallest node not yet visited
+            result.append(node.data)
+            node = node.right              # then continue with its right subtree
+        return result
 
-    def range(self, lo: int, hi: int) -> List[Patient]:
-        """Ids in [lo, hi]. O(n): a plain filter over the in-order list (AVL prunes and is O(log n + k))."""
-        return [p for p in self.inorder() if lo <= p.id <= hi]
+    def range(self, low, high):
+        """Patients with low <= id <= high. Time: O(n) (simply filters the sorted list)."""
+        result = []
+        for patient in self.inorder():
+            if low <= patient.id <= high:
+                result.append(patient)
+        return result
 
-    def height(self) -> int:
-        """Height, level by level. O(n)."""
-        level = [self._root] if self._root else []
+    def height(self):
+        """Height of the tree, counted level by level. Time: O(n)."""
+        if self.root is None:
+            return 0
+        level = [self.root]                # all nodes on the current level
         h = 0
-        while level:
-            h += 1
-            level = [c for n in level for c in (n.left, n.right) if c]
+        while len(level) > 0:
+            h += 1                         # we are on one more level
+            next_level = []
+            for node in level:             # collect the children of this level
+                if node.left is not None:
+                    next_level.append(node.left)
+                if node.right is not None:
+                    next_level.append(node.right)
+            level = next_level
         return h
 
-    def validate(self) -> bool:
-        """Keys strictly increasing in-order and count consistent."""
-        ids = [p.id for p in self.inorder()]
-        return all(a < b for a, b in zip(ids, ids[1:])) and len(ids) == self._count
+    def validate(self):
+        """True if the ids come out strictly increasing and the count is right."""
+        patients = self.inorder()
+        for i in range(1, len(patients)):
+            if patients[i - 1].id >= patients[i].id:
+                return False
+        return len(patients) == self.count
 ```
 
 ### `outbreak/max_heap.py`
@@ -594,87 +702,93 @@ Unit 1: binary max-heap.
 ```python
 """Unit 1: binary max-heap of (patient id, risk score).
 
-Array layout of a complete binary tree: parent(i) = (i-1)//2, children are 2i+1
-and 2i+2. No pointers are needed because the tree has no gaps.
+A max-heap always keeps the item with the BIGGEST score at the top, so we can
+get the most at-risk patient instantly. It is stored in a plain list that
+represents a "complete" binary tree, level by level:
+    parent of position i  -> (i - 1) // 2
+    children of position i -> 2*i + 1 and 2*i + 2
+Heap rule: every parent has a score >= its children's scores.
 """
-from typing import List, NamedTuple
 
 
-class HeapItem(NamedTuple):
-    id: int
-    score: float
+class HeapItem:
+    def __init__(self, id, score):
+        self.id = id          # patient id
+        self.score = score    # risk score
 
 
 class MaxHeap:
-    def __init__(self) -> None:
-        self._items: List[HeapItem] = []
+    def __init__(self):
+        self.items = []       # the heap, stored as a list
 
-    def __len__(self) -> int:
-        return len(self._items)
+    def __len__(self):
+        return len(self.items)
 
-    @staticmethod
-    def _higher(a: HeapItem, b: HeapItem) -> bool:
-        """Larger score wins; ties go to the smaller id so pop order is deterministic."""
+    def is_higher(self, a, b):
+        """True if item a should be above item b in the heap.
+
+        A bigger score wins. If scores are equal the smaller id wins, which makes
+        the order always the same (useful for repeatable results and tests).
+        """
         if a.score != b.score:
             return a.score > b.score
         return a.id < b.id
 
-    def _sift_up(self, i: int) -> None:
-        """Move item i up until its parent is at least as high. O(log n).
+    def sift_up(self, i):
+        """Move the item at position i up while it beats its parent. Time: O(log n).
 
-        The heap property held everywhere except between i and its parent; each
-        swap fixes that pair and only moves the problem one level up.
+        The heap rule can only be broken between this item and its parent. Each
+        swap fixes that pair, and the item goes up one level, at most log2(n) times.
         """
-        a = self._items
         while i > 0:
             parent = (i - 1) // 2
-            if not self._higher(a[i], a[parent]):
-                break
-            a[i], a[parent] = a[parent], a[i]
-            i = parent
+            if not self.is_higher(self.items[i], self.items[parent]):
+                break                                   # parent is already bigger: done
+            # swap the item with its parent
+            self.items[i], self.items[parent] = self.items[parent], self.items[i]
+            i = parent                                  # continue from the new position
 
-    def _sift_down(self, i: int) -> None:
-        """Move item i down until both children are lower. O(log n).
-
-        Swapping with the HIGHER child keeps the property between that child and
-        its sibling, so only one subtree can still be broken.
-        """
-        a, n = self._items, len(self._items)
+    def sift_down(self, i):
+        """Move the item at position i down until it beats both children. Time: O(log n)."""
+        n = len(self.items)
         while True:
-            best, l, r = i, 2 * i + 1, 2 * i + 2
-            if l < n and self._higher(a[l], a[best]):
-                best = l
-            if r < n and self._higher(a[r], a[best]):
-                best = r
-            if best == i:
-                return
-            a[i], a[best] = a[best], a[i]
-            i = best
+            biggest = i                                 # assume the item is already in place
+            left = 2 * i + 1
+            right = 2 * i + 2
+            if left < n and self.is_higher(self.items[left], self.items[biggest]):
+                biggest = left
+            if right < n and self.is_higher(self.items[right], self.items[biggest]):
+                biggest = right
+            if biggest == i:
+                break                                   # no child is bigger: done
+            # swap with the bigger child (this keeps the rule between the two children)
+            self.items[i], self.items[biggest] = self.items[biggest], self.items[i]
+            i = biggest
 
-    def push(self, pid: int, score: float) -> None:
-        """Insert. O(log n): append at the end (keeps the tree complete), then sift up."""
-        self._items.append(HeapItem(pid, score))
-        self._sift_up(len(self._items) - 1)
+    def push(self, patient_id, score):
+        """Add an item. Time: O(log n).
 
-    def pop(self) -> HeapItem:
-        """Remove and return the maximum. O(log n).
-
-        Move the last item to the root (keeps the tree complete), shrink, sift down.
+        Put it at the end (this keeps the tree complete) and let it climb up.
         """
-        if not self._items:
+        self.items.append(HeapItem(patient_id, score))
+        self.sift_up(len(self.items) - 1)
+
+    def pop(self):
+        """Remove and return the item with the biggest score. Time: O(log n)."""
+        if len(self.items) == 0:
             raise IndexError("pop from empty heap")
-        top = self._items[0]
-        last = self._items.pop()
-        if self._items:
-            self._items[0] = last
-            self._sift_down(0)
+        top = self.items[0]                  # the biggest item is always at the root
+        last = self.items.pop()              # take the last item off the end...
+        if len(self.items) > 0:
+            self.items[0] = last             # ...and put it at the root instead
+            self.sift_down(0)                # then let it sink to its right place
         return top
 
-    def peek(self) -> HeapItem:
-        """Maximum without removing it. O(1): it is always at index 0."""
-        if not self._items:
+    def peek(self):
+        """Look at the biggest item without removing it. Time: O(1)."""
+        if len(self.items) == 0:
             raise IndexError("peek at empty heap")
-        return self._items[0]
+        return self.items[0]
 ```
 
 ### `outbreak/graph.py`
@@ -682,181 +796,219 @@ class MaxHeap:
 Unit 2: contact graph, BFS levels, DFS clusters, Dijkstra with weight `-ln(p)`, hop path.
 
 ```python
-"""Unit 2: weighted, undirected contact graph (adjacency list)."""
+"""Unit 2: the contact graph (undirected, weighted, stored as an adjacency list).
+
+Each patient is a node. An edge between two patients means they were in contact.
+The adjacency list is a list where position u holds the list of u's edges.
+"""
 import heapq
 import math
-from collections import deque
-from typing import List, NamedTuple, Tuple
+from collections import deque   # a fast queue for BFS
 
-INF = math.inf
-RATE = 0.35    # per effective contact hour (model assumption)
-MIN_P = 1e-6   # floor so -ln(p) never becomes infinite
+INF = math.inf   # "infinity" = not reachable (yet)
 
-
-class Edge(NamedTuple):
-    to: int
-    duration: float   # hours of contact, > 0
-    proximity: float  # closeness in (0, 1]; 1 = shared room
-    p: float          # derived transmission probability in (0, 1]
+# Model constants (assumptions, not real epidemiology).
+RATE = 0.35      # infection chance per "effective contact hour"
+MIN_P = 1e-6     # smallest allowed p, so that -ln(p) never becomes infinite
 
 
-class PathResult(NamedTuple):
-    dist: List[float]   # -ln(path probability); inf if unreachable
-    parent: List[int]   # previous node on the best path; -1 for the source/unreachable
+class Edge:
+    """One direction of a contact: from some node u TO node `to`."""
+
+    def __init__(self, to, duration, proximity, p):
+        self.to = to                # the patient at the other end
+        self.duration = duration    # hours of contact (> 0)
+        self.proximity = proximity  # closeness in (0, 1]; 1 = same room
+        self.p = p                  # transmission probability in (0, 1]
 
 
-def transmission_probability(duration: float, proximity: float) -> float:
-    """The ONE place where p is derived.  MODEL ASSUMPTION (not validated epidemiology):
+class PathResult:
+    """What Dijkstra returns: for every node, its distance and its previous node."""
+
+    def __init__(self, dist, parent):
+        self.dist = dist        # dist[v] = -ln(probability of the best path to v)
+        self.parent = parent    # parent[v] = the node before v on that path (-1 = none)
+
+
+def transmission_probability(duration, proximity):
+    """The ONE place where the probability p of an edge is calculated.
+
+    MODEL ASSUMPTION (not validated epidemiology):
 
         p = 1 - exp(-RATE * duration * proximity)
 
-    "Exposure dose" = duration * proximity (hours of effective contact). If
-    infectious events arrive at a constant rate per dose unit, the chance of at
-    least one event is 1 - exp(-rate * dose): ~0 for no contact, -> 1 for long
-    close contact, smooth in between. p is clamped to [MIN_P, 1] so it stays in
-    (0, 1]; that guarantees -ln(p) is finite and >= 0, which Dijkstra needs. O(1).
+    Reasoning: "duration * proximity" is the effective contact time. Longer and
+    closer contact should give a higher chance. 1 - exp(-x) is a standard
+    formula for "chance that at least one infection event happens"; it is
+    0 when x = 0, grows with x, and never goes above 1. We clamp p to
+    [MIN_P, 1] so it is always in (0, 1] (this keeps -ln(p) finite and >= 0).
     """
     p = 1.0 - math.exp(-RATE * duration * proximity)
-    return min(1.0, max(MIN_P, p))
+    if p < MIN_P:
+        p = MIN_P
+    if p > 1.0:
+        p = 1.0
+    return p
 
 
 class Graph:
-    def __init__(self, num_nodes: int) -> None:
-        self.adj: List[List[Edge]] = [[] for _ in range(num_nodes)]
+    def __init__(self, num_nodes):
+        # One empty edge list per node.
+        self.adj = []
+        for i in range(num_nodes):
+            self.adj.append([])
         self.edge_count = 0
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.adj)
 
-    def add_edge(self, u: int, v: int, duration: float, proximity: float) -> None:
-        """Store an undirected contact as two directed edges."""
+    def add_edge(self, u, v, duration, proximity):
+        """Add a contact between u and v. Stored twice because it is undirected."""
         p = transmission_probability(duration, proximity)
-        self.adj[u].append(Edge(v, duration, proximity, p))
-        self.adj[v].append(Edge(u, duration, proximity, p))
+        self.adj[u].append(Edge(v, duration, proximity, p))   # u -> v
+        self.adj[v].append(Edge(u, duration, proximity, p))   # v -> u
         self.edge_count += 1
 
-    def bfs_levels(self, source: int) -> List[int]:
-        """Hops from source to every node (-1 if unreachable): the "exposure level".
+    def bfs_levels(self, source):
+        """Number of hops from source to every node; -1 if unreachable.
 
-        Level 1 = direct contacts, level 2 = contacts of contacts, ...
-        Complexity O(V + E). BFS uses a FIFO queue, so nodes leave the queue in
-        non-decreasing hop distance; the first time a node is seen is via a
-        fewest-hops path.
+        This is the "exposure level": level 1 = direct contacts, level 2 =
+        contacts of contacts, and so on.
+        Time: O(V + E) - every node and edge is looked at once.
+        Why it works: BFS uses a FIFO queue, so nodes are processed in order of
+        distance. The first time we reach a node is by the fewest hops.
         """
-        level = [-1] * len(self.adj)
+        level = [-1] * len(self.adj)    # -1 means "not visited yet"
         level[source] = 0
-        q = deque([source])
-        while q:
-            u = q.popleft()
-            for e in self.adj[u]:
-                if level[e.to] == -1:
-                    level[e.to] = level[u] + 1
-                    q.append(e.to)
+        queue = deque()
+        queue.append(source)
+        while len(queue) > 0:
+            u = queue.popleft()                 # take the oldest node in the queue
+            for edge in self.adj[u]:            # look at each neighbour of u
+                if level[edge.to] == -1:        # first visit
+                    level[edge.to] = level[u] + 1
+                    queue.append(edge.to)
         return level
 
-    def find_clusters(self) -> List[int]:
-        """Connected components by DFS; returns a label 0..k-1 per node.
+    def find_clusters(self):
+        """Split the graph into clusters (connected components) using DFS.
 
-        Complexity O(V + E). A DFS from an unlabelled node reaches exactly the
-        nodes connected to it, so every outer-loop start begins a new component.
-        An explicit stack (not recursion) keeps 100000-node graphs safe.
+        Returns a list where label[v] is the cluster number (0, 1, 2, ...) of node v.
+        Time: O(V + E).
+        Why it works: a DFS started at a node reaches exactly the nodes connected
+        to it, so every time we start a new DFS we have found a new cluster.
+        We use our own stack (a list) instead of recursion so very big graphs
+        cannot crash Python.
         """
-        label = [-1] * len(self.adj)
+        label = [-1] * len(self.adj)    # -1 means "no cluster yet"
         next_label = 0
         for start in range(len(self.adj)):
             if label[start] != -1:
-                continue
-            label[start] = next_label
+                continue                # already in a cluster
+            label[start] = next_label   # start a new cluster
             stack = [start]
-            while stack:
-                u = stack.pop()
-                for e in self.adj[u]:
-                    if label[e.to] == -1:
-                        label[e.to] = next_label
-                        stack.append(e.to)
+            while len(stack) > 0:
+                u = stack.pop()         # take the NEWEST node (that is what makes it DFS)
+                for edge in self.adj[u]:
+                    if label[edge.to] == -1:
+                        label[edge.to] = next_label
+                        stack.append(edge.to)
             next_label += 1
         return label
 
-    def likely_path(self, source: int) -> PathResult:
-        """Most likely transmission path from source to every node (Dijkstra).
+    def likely_path(self, source):
+        """Find the MOST LIKELY transmission path from source to every node (Dijkstra).
 
-        Complexity O((V + E) log V) with a binary heap.
-        Why it works: a path's probability is the PRODUCT of its edge
-        probabilities. Taking -ln turns products into sums,
-        -ln(p1*p2*...) = sum(-ln pi), and maximising the product = minimising the
-        sum. Every weight -ln(p) >= 0 because p <= 1, and Dijkstra is correct
-        exactly when weights are non-negative. So dist[v] = -ln(best path
-        probability) and exp(-dist[v]) is that probability.
-        heapq (a priority queue) is allowed here; stale entries are skipped.
+        Time: O((V + E) log V) when a heap is used.
+        The probability of a path is the PRODUCT of its edge probabilities, but
+        Dijkstra adds weights. The trick: -ln(a * b) = -ln(a) + -ln(b), so if
+        every edge gets weight -ln(p) then
+          * adding weights  = multiplying probabilities, and
+          * the SMALLEST total weight = the LARGEST probability.
+        Since p <= 1, every weight -ln(p) is >= 0, and Dijkstra needs
+        non-negative weights. At the end exp(-dist[v]) is the best probability.
         """
-        dist = [INF] * len(self.adj)
-        parent = [-1] * len(self.adj)
+        dist = [INF] * len(self.adj)    # best known distance to each node
+        parent = [-1] * len(self.adj)   # previous node on the best known path
         dist[source] = 0.0
-        pq: List[Tuple[float, int]] = [(0.0, source)]
-        while pq:
-            d, u = heapq.heappop(pq)
+        heap = [(0.0, source)]          # (distance, node); heapq keeps the smallest on top
+        while len(heap) > 0:
+            d, u = heapq.heappop(heap)  # the unfinished node closest to the source
             if d > dist[u]:
-                continue  # outdated entry
-            for e in self.adj[u]:
-                nd = d - math.log(e.p)  # -ln(p) >= 0
-                if nd < dist[e.to]:
-                    dist[e.to] = nd
-                    parent[e.to] = u
-                    heapq.heappush(pq, (nd, e.to))
+                continue                # old entry: we already found a better path to u
+            for edge in self.adj[u]:
+                new_dist = d - math.log(edge.p)     # -ln(p) is the edge weight
+                if new_dist < dist[edge.to]:        # found a better path to the neighbour
+                    dist[edge.to] = new_dist
+                    parent[edge.to] = u
+                    heapq.heappush(heap, (new_dist, edge.to))
         return PathResult(dist, parent)
 
-    @staticmethod
-    def reconstruct_path(r: PathResult, source: int, target: int) -> List[int]:
-        """Node list source..target from the parent array (empty if unreachable).
+    def reconstruct_path(self, result, source, target):
+        """Turn Dijkstra's parent list into a list of nodes [source, ..., target].
 
-        O(path length). Parents form a tree rooted at the source, so walking
-        parents from the target reaches the source; reverse for the order.
+        Returns [] if the target cannot be reached. Time: O(length of path).
+        We start at the target and follow the parents back to the source, so
+        the list comes out backwards and we reverse it at the end.
         """
-        if r.dist[target] == INF:
+        if result.dist[target] == INF:
             return []
-        path, v = [], target
-        while v != -1:
-            path.append(v)
-            v = r.parent[v]
-        path.reverse()
-        return path if path[0] == source else []
-
-    def hop_path(self, source: int, target: int) -> List[int]:
-        """Baseline path with the fewest edges, ignoring probabilities. O(V + E).
-
-        BFS with parent pointers; stops once the target is reached because BFS
-        finds fewest-hops paths first.
-        """
-        parent = {source: -1}
-        q = deque([source])
-        while q and target not in parent:
-            u = q.popleft()
-            for e in self.adj[u]:
-                if e.to not in parent:
-                    parent[e.to] = u
-                    q.append(e.to)
-        if target not in parent:
-            return []
-        path, v = [], target
-        while v != -1:
-            path.append(v)
-            v = parent[v]
+        path = []
+        node = target
+        while node != -1:
+            path.append(node)
+            node = result.parent[node]
         path.reverse()
         return path
 
-    def edge_probability(self, u: int, v: int) -> float:
-        """Probability of the best edge between u and v (0 if not adjacent). O(degree(u))."""
-        return max((e.p for e in self.adj[u] if e.to == v), default=0.0)
+    def hop_path(self, source, target):
+        """The path with the FEWEST hops, ignoring probabilities. Time: O(V + E).
 
-    def path_probability(self, path: List[int]) -> float:
-        """Probability that infection crosses every hop of a path (hops independent,
-        so probabilities multiply). Empty path (unreachable) = 0; a single node = 1."""
-        if not path:
+        It is a BFS that remembers where each node came from. BFS reaches every
+        node by the fewest hops, so we can stop as soon as the target is found.
+        """
+        parent = [-1] * len(self.adj)
+        seen = [False] * len(self.adj)
+        seen[source] = True
+        queue = deque()
+        queue.append(source)
+        while len(queue) > 0 and not seen[target]:
+            u = queue.popleft()
+            for edge in self.adj[u]:
+                if not seen[edge.to]:
+                    seen[edge.to] = True
+                    parent[edge.to] = u
+                    queue.append(edge.to)
+        if not seen[target]:
+            return []                    # target is in another cluster
+        path = []
+        node = target
+        while node != -1:                # walk back from the target to the source
+            path.append(node)
+            node = parent[node]
+        path.reverse()
+        return path
+
+    def edge_probability(self, u, v):
+        """Probability of the edge between u and v (0 if they are not neighbours)."""
+        best = 0.0
+        for edge in self.adj[u]:
+            if edge.to == v and edge.p > best:
+                best = edge.p
+        return best
+
+    def path_probability(self, path):
+        """Probability that infection travels along a whole path.
+
+        Each step is assumed independent, so we multiply the edge probabilities.
+        An empty path (no route) gives 0. A path of one node gives 1.
+        """
+        if len(path) == 0:
             return 0.0
-        prob = 1.0
-        for a, b in zip(path, path[1:]):
-            prob *= self.edge_probability(a, b)
-        return prob
+        probability = 1.0
+        for i in range(1, len(path)):
+            probability = probability * self.edge_probability(path[i - 1], path[i])
+        return probability
 ```
 
 ### `outbreak/risk.py`
@@ -864,77 +1016,99 @@ class Graph:
 Glue: risk score from Dijkstra output, ward aggregation, heap, supply options.
 
 ```python
-"""Glue between Unit 2 (graph) and Units 1 and 3."""
+"""Glue between the units: graph results -> risk scores -> heap and allocation options."""
 import math
-from typing import List
 
-from .allocation import Option, WardOptions
-from .graph import Graph
+from .allocation import Option
 from .max_heap import MaxHeap
-from .patient import Patient
 
-# MODEL ASSUMPTION: four supply packages per ward with diminishing returns.
-PACKAGE_COSTS = (0, 2, 4, 6)
-PACKAGE_EFFECT = (0.0, 0.40, 0.65, 0.80)  # fraction of expected cases averted
+# MODEL ASSUMPTION: each ward can get one of four supply packages.
+# More spending averts more cases, but with diminishing returns.
+PACKAGE_COSTS = [0, 2, 4, 6]                  # budget units
+PACKAGE_EFFECT = [0.0, 0.40, 0.65, 0.80]      # fraction of expected cases averted
 
 
-def node_risk(g: Graph, infected: List[int]) -> List[float]:
-    """risk(v) = 1 - prod over infected u of (1 - exp(-dist(u, v))).
+def node_risk(graph, infected):
+    """Risk of every patient, given the list of infected patients.
 
-    MODEL ASSUMPTION (not validated epidemiology): Dijkstra's dist(u, v) equals
-    -ln(probability of the best path u->v), so exp(-dist) is that path's
-    probability. "Infection reaches v from u" is that event, and different
-    infected sources are treated as independent, giving the usual "at least one
-    source succeeds" formula. An infected node has dist 0 to itself, a factor
-    (1 - 1) = 0, so its risk is exactly 1.
-    Complexity: one Dijkstra per source, O(k (V + E) log V) for k sources.
+    risk(v) = 1 - product over infected sources u of (1 - exp(-dist(u, v)))
+
+    MODEL ASSUMPTION (not validated epidemiology):
+      * dist(u, v) from Dijkstra is -ln(probability of the best path u -> v),
+        so exp(-dist) is the chance that infection travels from u to v.
+      * (1 - that chance) is the chance source u does NOT infect v.
+      * Treating sources as independent, the chance that NO source infects v is
+        the product of those numbers, and the risk is 1 minus it.
+    An infected patient has distance 0 to itself, so its factor is (1 - 1) = 0
+    and its risk is exactly 1.
+    Time: one Dijkstra per infected source.
     """
-    survive = [1.0] * len(g)  # probability of escaping every source
+    # not_infected[v] = chance that v escapes every source seen so far (starts at 1).
+    not_infected = [1.0] * len(graph)
     for source in infected:
-        dist = g.likely_path(source).dist
-        for v, d in enumerate(dist):
-            reach = 0.0 if math.isinf(d) else math.exp(-d)
-            survive[v] *= 1.0 - reach
-    return [1.0 - s for s in survive]
+        dist = graph.likely_path(source).dist
+        for v in range(len(graph)):
+            if math.isinf(dist[v]):
+                reach = 0.0                   # unreachable: this source cannot infect v
+            else:
+                reach = math.exp(-dist[v])    # chance that infection reaches v
+            not_infected[v] = not_infected[v] * (1.0 - reach)
+
+    risk = []
+    for v in range(len(graph)):
+        risk.append(1.0 - not_infected[v])
+    return risk
 
 
-def ward_risk(patients: List[Patient], risk: List[float], num_wards: int) -> List[float]:
-    """Mean node risk per ward. O(P). The mean is size-independent, so wards compare fairly."""
-    total, count = [0.0] * num_wards, [0] * num_wards
-    for p in patients:
-        total[p.ward] += risk[p.id]
-        count[p.ward] += 1
-    return [t / c if c else 0.0 for t, c in zip(total, count)]
+def ward_risk(patients, risk, num_wards):
+    """Average risk of the patients in each ward (the mean makes wards of
+    different sizes comparable)."""
+    total = [0.0] * num_wards
+    count = [0] * num_wards
+    for patient in patients:
+        total[patient.ward] += risk[patient.id]
+        count[patient.ward] += 1
+    result = []
+    for w in range(num_wards):
+        if count[w] > 0:
+            result.append(total[w] / count[w])
+        else:
+            result.append(0.0)
+    return result
 
 
-def ward_expected_cases(patients: List[Patient], risk: List[float],
-                        is_infected: List[bool], num_wards: int) -> List[float]:
-    """Expected NEW cases per ward: the sum of risks of not-yet-infected patients
-    (linearity of expectation, no independence needed). Infected patients are
-    excluded because their cases cannot be "averted"."""
+def ward_expected_cases(patients, risk, is_infected, num_wards):
+    """Expected number of NEW cases in each ward.
+
+    Adding up each patient's risk gives the expected count. Patients who are
+    already infected are skipped because their cases cannot be averted.
+    """
     expected = [0.0] * num_wards
-    for p in patients:
-        if not is_infected[p.id]:
-            expected[p.ward] += risk[p.id]
+    for patient in patients:
+        if not is_infected[patient.id]:
+            expected[patient.ward] += risk[patient.id]
     return expected
 
 
-def build_risk_heap(risk: List[float], is_infected: List[bool]) -> MaxHeap:
-    """Heap of (patient id, risk) for patients not already infected. O(P log P)."""
+def build_risk_heap(risk, is_infected):
+    """Put (patient id, risk) into a max-heap, skipping already-infected patients."""
     heap = MaxHeap()
-    for v, r in enumerate(risk):
+    for v in range(len(risk)):
         if not is_infected[v]:
-            heap.push(v, r)
+            heap.push(v, risk[v])
     return heap
 
 
-def build_ward_options(expected_cases: List[float]) -> WardOptions:
-    """Packages cost 0/2/4/6 units averting 0/40/65/80 % of a ward's expected cases.
-
-    Diminishing returns is what turns the allocation into a real trade-off.
-    """
-    return [[Option(c, cases * e) for c, e in zip(PACKAGE_COSTS, PACKAGE_EFFECT)]
-            for cases in expected_cases]
+def build_ward_options(expected_cases):
+    """For each ward, create the four packages. A package averts
+    (expected cases of the ward) x (its effect fraction)."""
+    wards = []
+    for cases in expected_cases:
+        options = []
+        for k in range(len(PACKAGE_COSTS)):
+            options.append(Option(PACKAGE_COSTS[k], cases * PACKAGE_EFFECT[k]))
+        wards.append(options)
+    return wards
 ```
 
 ### `outbreak/allocation.py`
@@ -942,176 +1116,256 @@ def build_ward_options(expected_cases: List[float]) -> WardOptions:
 Unit 3: knapsack DP with backtracking, greedy baseline, brute force, LCS.
 
 ```python
-"""Unit 3: resource allocation by dynamic programming, plus LCS trend similarity."""
-from dataclasses import dataclass, field
-from typing import List, NamedTuple
+"""Unit 3: resource allocation with dynamic programming, plus LCS trend similarity.
 
-UNREACHABLE = float("-inf")  # marks dp cells with no valid assignment
+Problem: we have several wards and a limited budget. For each ward we may pick
+ONE "package" of supplies (each package has a cost and averts some expected
+cases). Choose one package per ward so the total cost fits in the budget and
+the total number of cases averted is as large as possible.
+This is the "multiple-choice knapsack" problem.
+"""
+
+NEG = float("-inf")   # marks a table cell that cannot be reached
 
 
-class Option(NamedTuple):
-    """One way to equip a ward: spend `cost` units, avert `value` expected cases.
+class Option:
+    """One package for a ward: it costs `cost` units and averts `value` cases.
 
-    Include a (0, 0) option in every ward so "give this ward nothing" is possible.
+    Every ward should include an Option(0, 0) = "give this ward nothing".
     """
-    cost: int
-    value: float
+
+    def __init__(self, cost, value):
+        self.cost = cost
+        self.value = value
 
 
-WardOptions = List[List[Option]]  # [ward][option]
-
-
-@dataclass
 class AllocationPlan:
-    total_value: float = 0.0
-    total_cost: int = 0
-    choice: List[int] = field(default_factory=list)  # option index per ward, -1 = none
-    feasible: bool = True                            # False if nothing fits the budget
+    """The answer: which option each ward gets, and the totals."""
+
+    def __init__(self, num_wards):
+        self.total_value = 0.0
+        self.total_cost = 0
+        self.choice = [-1] * num_wards   # choice[w] = option index chosen for ward w (-1 = none)
+        self.feasible = True             # False if no choice fits within the budget
 
 
-def _plan_from_choice(wards: WardOptions, choice: List[int]) -> AllocationPlan:
-    plan = AllocationPlan(choice=list(choice))
-    for ward, j in zip(wards, choice):
-        if j >= 0:
-            plan.total_cost += ward[j].cost
-            plan.total_value += ward[j].value
+def make_plan(wards, choice):
+    """Build a plan from a list of chosen option indexes and add up the totals."""
+    plan = AllocationPlan(len(wards))
+    plan.choice = list(choice)
+    for w in range(len(wards)):
+        if choice[w] >= 0:
+            option = wards[w][choice[w]]
+            plan.total_cost += option.cost
+            plan.total_value += option.value
     return plan
 
 
-def dp_allocate(wards: WardOptions, budget: int) -> AllocationPlan:
-    """Multiple-choice knapsack: exactly one option per ward, total cost <= budget.
+def dp_allocate(wards, budget):
+    """Best allocation using dynamic programming.
 
-    Recurrence:  dp[i][b] = max over options j of ward i with c_ij <= b of
-                            dp[i-1][b - c_ij] + v_ij
-    where dp[i][b] = best value using the first i wards with at most b budget,
-    and dp[0][b] = 0 for every b (no wards, no value).
-
-    Complexity: O(W * B * K) time, O(W * B) memory (W wards, budget B, K options
-    per ward); the table is kept so we can backtrack.
-    Why it works (optimal substructure): in an optimal plan for the first i
-    wards, the choices for the first i-1 wards must themselves be optimal for the
-    budget left over, otherwise swapping in a better sub-plan would improve the
-    whole plan. The table stores those sub-answers so each is computed once.
-    Backtracking: pick[i][b] remembers which option achieved dp[i][b]; walking
-    from (W, B) back to 0 and subtracting each chosen cost recovers the plan.
+    Table: dp[i][b] = the most cases we can avert using only the first i wards
+    and at most b budget units.
+    Recurrence: dp[i][b] = max over the options j of ward i (with cost <= b) of
+                           dp[i-1][b - cost_j] + value_j
+    In words: try each package for ward i, pay for it, and add the best result
+    for the earlier wards with the money that is left.
+    Base case: dp[0][b] = 0 (no wards, nothing to gain).
+    Time: O(W * B * K) for W wards, budget B and K options per ward.
+    Why it is correct: if the whole plan is the best one, then the part of it
+    for the first i-1 wards must be the best for the money left; if it were not,
+    we could swap in a better part and improve the whole plan. The table stores
+    those smaller best answers, so each is calculated only once.
     """
-    W = len(wards)
-    dp = [[UNREACHABLE] * (budget + 1) for _ in range(W + 1)]
-    pick = [[-1] * (budget + 1) for _ in range(W + 1)]
-    dp[0] = [0.0] * (budget + 1)
-    for i in range(1, W + 1):
+    num_wards = len(wards)
+
+    # dp has num_wards+1 rows and budget+1 columns. NEG = "impossible".
+    dp = []
+    for i in range(num_wards + 1):
+        dp.append([NEG] * (budget + 1))
+    # pick[i][b] remembers WHICH option gave dp[i][b], so we can backtrack later.
+    pick = []
+    for i in range(num_wards + 1):
+        pick.append([-1] * (budget + 1))
+
+    # Base case: with zero wards the value is 0 for every budget.
+    for b in range(budget + 1):
+        dp[0][b] = 0.0
+
+    # Fill the table row by row (ward by ward).
+    for i in range(1, num_wards + 1):
         for b in range(budget + 1):
-            for j, o in enumerate(wards[i - 1]):
-                if o.cost > b or dp[i - 1][b - o.cost] == UNREACHABLE:
-                    continue
-                candidate = dp[i - 1][b - o.cost] + o.value
-                if candidate > dp[i][b]:
+            for j in range(len(wards[i - 1])):
+                option = wards[i - 1][j]
+                if option.cost > b:
+                    continue                          # we cannot afford this option
+                before = dp[i - 1][b - option.cost]   # best for earlier wards with what is left
+                if before == NEG:
+                    continue                          # earlier wards cannot be served
+                candidate = before + option.value
+                if candidate > dp[i][b]:              # better than anything tried so far
                     dp[i][b] = candidate
                     pick[i][b] = j
-    if dp[W][budget] == UNREACHABLE:
-        return AllocationPlan(choice=[-1] * W, feasible=False)
-    choice, b = [-1] * W, budget
-    for i in range(W, 0, -1):
-        j = pick[i][b]
+
+    # If even the full budget cannot serve all wards, there is no valid plan.
+    if dp[num_wards][budget] == NEG:
+        plan = AllocationPlan(num_wards)
+        plan.feasible = False
+        return plan
+
+    # Backtracking: start at the last ward with the full budget and walk back.
+    choice = [-1] * num_wards
+    b = budget
+    for i in range(num_wards, 0, -1):
+        j = pick[i][b]                    # the option chosen for ward i-1 (0-based)
         choice[i - 1] = j
-        b -= wards[i - 1][j].cost
-    return _plan_from_choice(wards, choice)
+        b = b - wards[i - 1][j].cost      # that option used some budget; the rest is for earlier wards
+    return make_plan(wards, choice)
 
 
-def greedy_allocate(wards: WardOptions, budget: int) -> AllocationPlan:
-    """Baseline heuristic. O(N log N) for N = total options.
+def get_ratio(item):
+    """Sorting helper: item is (ratio, ward, option); return its ratio."""
+    return item[0]
 
-    Sort every option by value per cost; take an option if its ward has no choice
-    yet and it still fits. Why it can be WRONG: it never reconsiders. A cheap
-    option with a great ratio can use budget that one bigger, better option
-    elsewhere needed, and it cannot upgrade a ward's package. Wards left without
-    a choice get their best zero-cost option if one exists.
+
+def greedy_allocate(wards, budget):
+    """Baseline: always take the best value-per-cost option that still fits.
+
+    Time: O(N log N) for N options (the sort). It is simple but can be WRONG:
+    it never changes its mind, so a cheap option with a great ratio may use up
+    money that one big, better option in another ward needed.
     """
-    items = [(o.value / o.cost, i, j)
-             for i, ward in enumerate(wards) for j, o in enumerate(ward) if o.cost > 0]
-    items.sort(key=lambda t: -t[0])  # sort is stable, so ties keep input order
-    choice, remaining = [-1] * len(wards), budget
-    for _, i, j in items:
-        if choice[i] == -1 and wards[i][j].cost <= remaining:
-            choice[i] = j
-            remaining -= wards[i][j].cost
-    for i, ward in enumerate(wards):
-        if choice[i] != -1:
+    # Step 1: list every option that costs something, with its value/cost ratio.
+    items = []
+    for w in range(len(wards)):
+        for j in range(len(wards[w])):
+            option = wards[w][j]
+            if option.cost > 0:
+                items.append((option.value / option.cost, w, j))
+
+    # Step 2: sort so the best ratio comes first (ties keep their original order).
+    items.sort(key=get_ratio, reverse=True)
+
+    # Step 3: walk through the list and take an option if the ward has no
+    # package yet and we can still afford it.
+    choice = [-1] * len(wards)
+    money_left = budget
+    for item in items:
+        w = item[1]
+        j = item[2]
+        cost = wards[w][j].cost
+        if choice[w] == -1 and cost <= money_left:
+            choice[w] = j
+            money_left = money_left - cost
+
+    # Step 4: wards still without a package get their best free option, if any.
+    for w in range(len(wards)):
+        if choice[w] != -1:
             continue
-        for j, o in enumerate(ward):
-            if o.cost == 0 and (choice[i] == -1 or o.value > ward[choice[i]].value):
-                choice[i] = j
-    plan = _plan_from_choice(wards, choice)
-    plan.feasible = -1 not in choice
+        for j in range(len(wards[w])):
+            option = wards[w][j]
+            if option.cost == 0:
+                if choice[w] == -1 or option.value > wards[w][choice[w]].value:
+                    choice[w] = j
+
+    plan = make_plan(wards, choice)
+    plan.feasible = (-1 not in choice)
     return plan
 
 
-def brute_force_allocate(wards: WardOptions, budget: int) -> AllocationPlan:
-    """Ground truth for tests. O(K^W): tiny instances only.
+def best_from(wards, i, budget_left):
+    """Try EVERY combination for wards i, i+1, ... and return (best_value, best_choices).
 
-    Trustworthy because it enumerates every assignment, so there is nothing to get wrong.
+    Returns (None, None) if no combination fits in budget_left.
     """
-    best = {"value": float("-inf"), "choice": None}
-    current = [-1] * len(wards)
-
-    def search(i: int, left: int, value: float) -> None:
-        if i == len(wards):
-            if value > best["value"]:
-                best["value"], best["choice"] = value, list(current)
-            return
-        for j, o in enumerate(wards[i]):
-            if o.cost <= left:
-                current[i] = j
-                search(i + 1, left - o.cost, value + o.value)
-        current[i] = -1
-
-    search(0, budget, 0.0)
-    if best["choice"] is None:
-        return AllocationPlan(choice=[-1] * len(wards), feasible=False)
-    return _plan_from_choice(wards, best["choice"])
+    if i == len(wards):
+        return 0.0, []                       # no wards left: nothing to choose
+    best_value = None
+    best_choices = None
+    for j in range(len(wards[i])):
+        option = wards[i][j]
+        if option.cost > budget_left:
+            continue                         # too expensive
+        sub_value, sub_choices = best_from(wards, i + 1, budget_left - option.cost)
+        if sub_value is None:
+            continue                         # the later wards cannot be served after this choice
+        total = sub_value + option.value
+        if best_value is None or total > best_value:
+            best_value = total
+            best_choices = [j] + sub_choices
+    return best_value, best_choices
 
 
-def lcs_length(a: str, b: str) -> int:
-    """Length of the longest common subsequence (same order, not nec. adjacent).
+def brute_force_allocate(wards, budget):
+    """Check every possible allocation. Time: O(K^W), so only for tiny test cases.
 
-    O(n*m) time and memory.
-    Recurrence: L[i][j] = L[i-1][j-1] + 1 if a[i-1] == b[j-1],
-                else max(L[i-1][j], L[i][j-1]).
-    Why it works: if the last letters match, some optimal subsequence can use
-    both; if not, at least one of them is unused, so drop it and take the better case.
+    We trust it because it tries everything, so there is nothing to get wrong.
+    The tests compare the DP result with this one.
     """
-    L = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    value, choices = best_from(wards, 0, budget)
+    if value is None:
+        plan = AllocationPlan(len(wards))
+        plan.feasible = False
+        return plan
+    return make_plan(wards, choices)
+
+
+def lcs_length(a, b):
+    """Length of the longest common subsequence of strings a and b.
+
+    A subsequence keeps the letters in order but may skip letters.
+    Example: "ABCBDAB" and "BDCABA" share "BCBA" (length 4).
+    Table: L[i][j] = LCS length of the first i letters of a and first j of b.
+      if a[i-1] == b[j-1]:  L[i][j] = L[i-1][j-1] + 1   (the matching letter extends the answer)
+      else:                 L[i][j] = max(L[i-1][j], L[i][j-1])  (skip a letter from a or from b)
+    Time: O(len(a) * len(b)).
+    """
+    # (len(a)+1) x (len(b)+1) table filled with zeros; row 0 and column 0 stay 0
+    # because comparing with an empty string gives an LCS of 0.
+    table = []
+    for i in range(len(a) + 1):
+        table.append([0] * (len(b) + 1))
+
     for i in range(1, len(a) + 1):
         for j in range(1, len(b) + 1):
             if a[i - 1] == b[j - 1]:
-                L[i][j] = L[i - 1][j - 1] + 1
+                table[i][j] = table[i - 1][j - 1] + 1
             else:
-                L[i][j] = max(L[i - 1][j], L[i][j - 1])
-    return L[len(a)][len(b)]
+                table[i][j] = max(table[i - 1][j], table[i][j - 1])
+    return table[len(a)][len(b)]
 
 
-def lcs_similarity(a: str, b: str) -> float:
-    """LCS length / length of the longer string, in [0, 1] (two empty strings = 1).
+def lcs_similarity(a, b):
+    """Similarity between 0 and 1: LCS length divided by the longer string's length.
 
-    Dividing by the longer length keeps the score in [0, 1]. O(n*m).
+    1 means identical trends, 0 means nothing in common. Two empty strings count as 1.
     """
     longest = max(len(a), len(b))
-    return 1.0 if longest == 0 else lcs_length(a, b) / longest
+    if longest == 0:
+        return 1.0
+    return lcs_length(a, b) / longest
 
 
-def discretise_series(series: List[float], flat_tolerance: float = 0.05) -> str:
-    """Turn a case-count series into R (rising) / F (flat) / D (falling), one letter per step.
+def discretise_series(series, flat_tolerance=0.05):
+    """Turn a list of daily case counts into a string of R, F and D.
 
-    O(n). Each step compares day t+1 with day t using the RELATIVE change
-    (divided by max(previous, 1), which makes small and large wards comparable
-    and avoids dividing by zero). Above +tolerance is R, below -tolerance is D,
-    otherwise F.
+    R = rising, F = flat, D = falling; one letter for each day-to-day change.
+    We use the RELATIVE change (change divided by yesterday's value) so small and
+    large wards can be compared. max(yesterday, 1) avoids dividing by zero.
+    A change within +/- flat_tolerance (5% by default) counts as flat.
     """
-    out = []
-    for prev, cur in zip(series, series[1:]):
-        change = (cur - prev) / max(prev, 1.0)
-        out.append("R" if change > flat_tolerance else "D" if change < -flat_tolerance else "F")
-    return "".join(out)
+    letters = ""
+    for t in range(1, len(series)):
+        yesterday = series[t - 1]
+        today = series[t]
+        change = (today - yesterday) / max(yesterday, 1.0)
+        if change > flat_tolerance:
+            letters += "R"
+        elif change < -flat_tolerance:
+            letters += "D"
+        else:
+            letters += "F"
+    return letters
 ```
 
 ### `outbreak/data_gen.py`
@@ -1119,71 +1373,97 @@ def discretise_series(series: List[float], flat_tolerance: float = 0.05) -> str:
 Synthetic graph, patients and case series; optional JHU CSV loader.
 
 ```python
-"""Synthetic inputs (seeded, reproducible) plus an optional real-data loader."""
+"""Synthetic (made-up) data for the project, plus an optional real-data loader.
+
+Every function takes a `seed`. The same seed always gives the same data, so
+results can be repeated exactly.
+"""
 import csv
 import os
 import random
-from typing import List, Optional, Tuple
 
-from .allocation import Option, WardOptions
+from .allocation import Option
 from .graph import Graph
 from .patient import Patient
 
 
-def generate_contact_graph(n: int, avg_degree: float, seed: int) -> Graph:
-    """Random graph with about n * avg_degree / 2 distinct undirected edges. O(m).
+def generate_contact_graph(n, avg_degree, seed):
+    """Random contact graph with n nodes and the given average degree.
 
-    Each edge joins two random distinct nodes; a set of used pairs prevents
-    duplicates. Average degree = 2m / n, so we draw m = n * avg_degree / 2 edges
-    (capped at n(n-1)/2). Duration 0.2..6 h and proximity 0.1..1, uniform: model assumptions.
+    Average degree = 2 * (number of edges) / n, so we need n * avg_degree / 2 edges.
+    We repeatedly pick two random different patients and connect them, skipping
+    pairs that are already connected.
+    Contact duration is random in 0.2..6 hours and proximity in 0.1..1 (assumptions).
     """
-    g = Graph(n)
+    graph = Graph(n)
     if n < 2:
-        return g
+        return graph
     rng = random.Random(seed)
-    target = min(n * (n - 1) // 2, int(n * avg_degree / 2))
-    used = set()
-    while len(used) < target:
-        u, v = rng.randrange(n), rng.randrange(n)
+    wanted_edges = int(n * avg_degree / 2)
+    most_possible = n * (n - 1) // 2          # a graph cannot have more edges than this
+    if wanted_edges > most_possible:
+        wanted_edges = most_possible
+
+    used_pairs = set()                        # pairs that already have an edge
+    while len(used_pairs) < wanted_edges:
+        u = rng.randrange(n)
+        v = rng.randrange(n)
         if u == v:
+            continue                          # a patient cannot contact themselves
+        if u < v:
+            pair = (u, v)
+        else:
+            pair = (v, u)                     # (3, 5) and (5, 3) are the same edge
+        if pair in used_pairs:
             continue
-        key = (u, v) if u < v else (v, u)
-        if key in used:
-            continue
-        used.add(key)
-        g.add_edge(u, v, rng.uniform(0.2, 6.0), rng.uniform(0.1, 1.0))
-    return g
+        used_pairs.add(pair)
+        duration = rng.uniform(0.2, 6.0)
+        proximity = rng.uniform(0.1, 1.0)
+        graph.add_edge(u, v, duration, proximity)
+    return graph
 
 
-def generate_patients(n: int, num_wards: int, seed: int) -> List[Patient]:
-    """n patients with id = 0..n-1 (id == graph node index)."""
+def generate_patients(n, num_wards, seed):
+    """n random patients with ids 0..n-1 (the id is also the graph node number)."""
     rng = random.Random(seed)
-    return [Patient(i, rng.randint(1, 90), rng.randrange(num_wards), rng.randint(1, 5))
-            for i in range(n)]
+    patients = []
+    for i in range(n):
+        age = rng.randint(1, 90)
+        ward = rng.randrange(num_wards)
+        severity = rng.randint(1, 5)
+        patients.append(Patient(i, age, ward, severity))
+    return patients
 
 
-def synthetic_case_series(num_wards: int, days: int, seed: int) -> List[List[float]]:
-    """Fake daily case counts: each ward gets a growth rate in [-8%, +12%] per day,
-    +-5% noise, starting from 20..100 cases."""
+def synthetic_case_series(num_wards, days, seed):
+    """Made-up daily case counts, one list per ward.
+
+    Each ward starts at 20..100 cases and changes by its own daily rate
+    (between -8% and +12%) plus a little random noise (+/- 5%).
+    """
     rng = random.Random(seed)
     all_series = []
-    for _ in range(num_wards):
-        value, rate = rng.uniform(20, 100), rng.uniform(-0.08, 0.12)
+    for w in range(num_wards):
+        value = rng.uniform(20, 100)
+        rate = rng.uniform(-0.08, 0.12)
         series = []
-        for _ in range(days):
+        for d in range(days):
             series.append(value)
-            value = max(0.0, value * (1.0 + rate + rng.uniform(-0.05, 0.05)))
+            noise = rng.uniform(-0.05, 0.05)
+            value = value * (1.0 + rate + noise)
+            if value < 0:
+                value = 0.0                   # case counts cannot be negative
         all_series.append(series)
     return all_series
 
 
-def load_jhu_csv(path: str) -> List[List[float]]:
-    """Read a Johns Hopkins CSSE confirmed-cases CSV (time_series_covid19_confirmed_global.csv).
+def load_jhu_csv(path):
+    """Read a Johns Hopkins CSSE file (time_series_covid19_confirmed_global.csv).
 
-    Format: Province/State,Country/Region,Lat,Long,<one column per date>...
-    The first four columns are labels; the rest are cumulative confirmed counts.
-    Returns one cumulative series per row, or [] if the file is missing/unreadable.
-    The csv module handles quoted commas such as "Korea, South".
+    Each row is: Province/State, Country/Region, Lat, Long, then one column per
+    date holding the CUMULATIVE confirmed cases. We return one list of numbers per
+    row, or [] if the file does not exist or cannot be read.
+    (The csv module is used because names like "Korea, South" contain commas.)
     """
     if not os.path.isfile(path):
         return []
@@ -1191,43 +1471,66 @@ def load_jhu_csv(path: str) -> List[List[float]]:
     try:
         with open(path, newline="") as f:
             reader = csv.reader(f)
-            next(reader, None)  # header
+            next(reader, None)                # skip the header line
             for fields in reader:
-                if len(fields) > 4:
-                    rows.append([float(x) if x else 0.0 for x in fields[4:]])
+                if len(fields) <= 4:
+                    continue                  # no date columns: skip
+                numbers = []
+                for text in fields[4:]:       # the first 4 columns are labels
+                    if text == "":
+                        numbers.append(0.0)
+                    else:
+                        numbers.append(float(text))
+                rows.append(numbers)
     except (OSError, ValueError):
-        return []
+        return []                             # unreadable or malformed file
     return rows
 
 
-def case_series_for_wards(path: str, num_wards: int, days: int,
-                          seed: int) -> Tuple[List[List[float]], bool]:
-    """Ward trend data: (series, used_real_data).
+def case_series_for_wards(path, num_wards, days, seed):
+    """Daily case series for each ward. Returns (series, used_real_data).
 
-    Uses the first `num_wards` CSV rows (last `days` days) if the file loads and
-    is big enough, converting cumulative totals to daily new cases (negative
-    corrections clamp to 0). Otherwise falls back to synthetic series.
+    If the CSV exists and has enough rows and days we use it, converting the
+    cumulative totals into daily NEW cases (today minus yesterday, never below 0).
+    Otherwise we fall back to synthetic data.
     """
     rows = load_jhu_csv(path)
-    if len(rows) < num_wards or any(len(r) <= days for r in rows[:num_wards]):
+    enough = len(rows) >= num_wards
+    if enough:
+        for w in range(num_wards):
+            if len(rows[w]) <= days:
+                enough = False                # this row has too few days
+    if not enough:
         return synthetic_case_series(num_wards, days, seed), False
-    out = []
-    for cum in rows[:num_wards]:
-        n = len(cum)
-        out.append([max(0.0, cum[t] - cum[t - 1]) for t in range(n - days, n)])
-    return out, True
+
+    series = []
+    for w in range(num_wards):
+        cumulative = rows[w]
+        daily = []
+        for t in range(len(cumulative) - days, len(cumulative)):   # the last `days` days
+            new_cases = cumulative[t] - cumulative[t - 1]
+            if new_cases < 0:
+                new_cases = 0.0               # corrections in the data can go negative
+            daily.append(new_cases)
+        series.append(daily)
+    return series, True
 
 
-def random_allocation_instance(num_wards: int, options_per_ward: int, seed: int) -> WardOptions:
-    """Random knapsack instance: every ward has (0,0) plus options with increasing
-    cost (+1..4 each step) and value (+0.5..6 each step), so bigger packages avert more."""
+def random_allocation_instance(num_wards, options_per_ward, seed):
+    """A random knapsack problem for tests and benchmarks.
+
+    Every ward gets Option(0, 0) first, then more options where both cost and
+    value increase step by step (so bigger packages avert more cases).
+    """
     rng = random.Random(seed)
     wards = []
-    for _ in range(num_wards):
+    for w in range(num_wards):
         options = [Option(0, 0.0)]
-        for _ in range(1, options_per_ward):
+        for k in range(1, options_per_ward):
             last = options[-1]
-            options.append(Option(last.cost + rng.randint(1, 4), last.value + rng.uniform(0.5, 6.0)))
+            new_cost = last.cost + rng.randint(1, 4)
+            new_value = last.value + rng.uniform(0.5, 6.0)
+            options.append(Option(new_cost, new_value))
         wards.append(options)
     return wards
 ```
@@ -1237,97 +1540,139 @@ def random_allocation_instance(num_wards: int, options_per_ward: int, seed: int)
 End-to-end pipeline demo.
 
 ```python
-"""Run Records -> Unit 1 -> Contact graph -> Unit 2 -> Risk -> Unit 3 -> Plan on a small example.
+"""Run the whole pipeline on a small example and print a report.
+
+    Records -> Unit 1 -> Contact graph -> Unit 2 -> Risk score -> Unit 3 -> Allocation plan
 
 Usage: python3 main.py [path/to/time_series_covid19_confirmed_global.csv]
 """
 import sys
 
-from outbreak.allocation import dp_allocate, discretise_series, greedy_allocate, lcs_similarity
+from outbreak.allocation import (dp_allocate, greedy_allocate, discretise_series,
+                                 lcs_similarity)
 from outbreak.avl_tree import AvlTree
-from outbreak.data_gen import case_series_for_wards, generate_contact_graph, generate_patients
-from outbreak.graph import Graph
+from outbreak.data_gen import (case_series_for_wards, generate_contact_graph,
+                               generate_patients)
 from outbreak.risk import (build_risk_heap, build_ward_options, node_risk,
                            ward_expected_cases, ward_risk)
 
-PATIENTS, WARDS, BUDGET, DAYS, SEED = 40, 5, 12, 21, 42
-INFECTED = [0, 7]
+# Settings for the example.
+NUM_PATIENTS = 40
+NUM_WARDS = 5
+BUDGET = 12            # supply units we can spend in total
+DAYS = 21              # length of each ward's case-count series
+SEED = 42              # same seed = same result every run
+INFECTED = [0, 7]      # patients who are known to be infected
 
 
-def path_text(path):
-    return " -> ".join(map(str, path)) if path else "(no path)"
+def path_to_text(path):
+    """Turn [0, 4, 9] into the text '0 -> 4 -> 9'."""
+    if len(path) == 0:
+        return "(no path)"
+    text = str(path[0])
+    for node in path[1:]:
+        text += " -> " + str(node)
+    return text
 
 
-def main() -> None:
-    csv_path = sys.argv[1] if len(sys.argv) > 1 else "time_series_covid19_confirmed_global.csv"
+def main():
+    if len(sys.argv) > 1:
+        csv_path = sys.argv[1]
+    else:
+        csv_path = "time_series_covid19_confirmed_global.csv"
 
-    # ---- Unit 1: records in an AVL tree ----
-    patients = generate_patients(PATIENTS, WARDS, SEED)
+    # ---- UNIT 1: store the patient records in an AVL tree ----
+    patients = generate_patients(NUM_PATIENTS, NUM_WARDS, SEED)
     records = AvlTree()
-    for p in reversed(patients):  # descending ids: worst case for a plain BST
-        records.insert(p)
+    for i in range(len(patients) - 1, -1, -1):   # insert in DESCENDING id order:
+        records.insert(patients[i])              # a plain BST would become a chain here
     print("== Records ==")
-    print(f"{len(records)} patients stored in AVL tree, height {records.height()}, "
-          f"valid={'yes' if records.validate() else 'NO'}\n")
+    print("%d patients stored in AVL tree, height %d, valid=%s\n"
+          % (len(records), records.height(), "yes" if records.validate() else "NO"))
 
-    # ---- Unit 2: contact graph, exposure levels, clusters ----
-    g = generate_contact_graph(PATIENTS, 3.0, SEED)
-    is_infected = [v in INFECTED for v in range(PATIENTS)]
-    clusters = g.find_clusters()
+    # ---- UNIT 2: contact graph, exposure levels, clusters ----
+    graph = generate_contact_graph(NUM_PATIENTS, 3.0, SEED)
+    is_infected = [False] * NUM_PATIENTS
+    for p in INFECTED:
+        is_infected[p] = True
+
+    clusters = graph.find_clusters()
     print("== Contact graph ==")
-    print(f"{len(g)} nodes, {g.edge_count} contacts, {max(clusters) + 1} clusters. "
-          f"Infected sources: {INFECTED[0]} and {INFECTED[1]}")
-    level = g.bfs_levels(INFECTED[0])
-    print(f"Exposure levels from patient {INFECTED[0]} (hops):")
-    for l in range(1, max(level) + 1):
-        print(f"  level {l}: {level.count(l)} patients")
-    print(f"  unreachable: {level.count(-1)} patients\n")
+    print("%d nodes, %d contacts, %d clusters. Infected sources: %d and %d"
+          % (len(graph), graph.edge_count, max(clusters) + 1, INFECTED[0], INFECTED[1]))
 
-    # ---- Risk glue + heap ----
-    risk = node_risk(g, INFECTED)
+    levels = graph.bfs_levels(INFECTED[0])
+    print("Exposure levels from patient %d (hops):" % INFECTED[0])
+    for level in range(1, max(levels) + 1):
+        print("  level %d: %d patients" % (level, levels.count(level)))
+    print("  unreachable: %d patients\n" % levels.count(-1))
+
+    # ---- Risk score for every patient, then the heap ----
+    risk = node_risk(graph, INFECTED)
     heap = build_risk_heap(risk, is_infected)
     print("== Top 5 critical patients (by exposure risk) ==")
-    print(f"  {'id':<4} {'risk':<6} {'age':<5} {'ward':<5} severity")
+    print("  %-4s %-6s %-5s %-5s %s" % ("id", "risk", "age", "ward", "severity"))
     target = None
-    for k in range(min(5, len(heap))):
-        top = heap.pop()
-        target = top.id if k == 0 else target
-        p = records.search(top.id)
-        print(f"  {top.id:<4} {top.score:<6.3f} {p.age:<5} {p.ward:<5} {p.severity}")
+    shown = 0
+    while shown < 5 and len(heap) > 0:
+        top = heap.pop()                  # always the highest remaining risk
+        if shown == 0:
+            target = top.id               # remember the most at-risk patient
+        patient = records.search(top.id)  # look the full record up in the AVL tree
+        print("  %-4d %-6.3f %-5d %-5d %d"
+              % (top.id, top.score, patient.age, patient.ward, patient.severity))
+        shown += 1
 
-    # ---- Most likely path to the top patient ----
-    print(f"\n== Most likely transmission path to patient {target} ==")
-    results = {s: g.likely_path(s) for s in INFECTED}
-    best_source = min(INFECTED, key=lambda s: results[s].dist[target])
-    likely = Graph.reconstruct_path(results[best_source], best_source, target)
-    hops = g.hop_path(best_source, target)
-    print(f"Likely path (from source {best_source}): {path_text(likely)}")
-    print(f"  probability {g.path_probability(likely):.4f}")
-    print(f"Fewest-hops path:            {path_text(hops)}")
-    print(f"  probability {g.path_probability(hops):.4f}\n")
+    # ---- Most likely transmission path to that patient ----
+    print("\n== Most likely transmission path to patient %d ==" % target)
+    # Run Dijkstra from each infected patient and use the source closest to the target.
+    best_source = INFECTED[0]
+    best_result = graph.likely_path(best_source)
+    for source in INFECTED[1:]:
+        result = graph.likely_path(source)
+        if result.dist[target] < best_result.dist[target]:
+            best_source = source
+            best_result = result
+    likely = graph.reconstruct_path(best_result, best_source, target)
+    hops = graph.hop_path(best_source, target)
+    print("Likely path (from source %d): %s" % (best_source, path_to_text(likely)))
+    print("  probability %.4f" % graph.path_probability(likely))
+    print("Fewest-hops path:            %s" % path_to_text(hops))
+    print("  probability %.4f\n" % graph.path_probability(hops))
 
-    # ---- Unit 3: allocation ----
-    wr = ward_risk(patients, risk, WARDS)
-    expected = ward_expected_cases(patients, risk, is_infected, WARDS)
+    # ---- UNIT 3: allocate the supplies ----
+    ward_scores = ward_risk(patients, risk, NUM_WARDS)
+    expected = ward_expected_cases(patients, risk, is_infected, NUM_WARDS)
     options = build_ward_options(expected)
-    dp, greedy = dp_allocate(options, BUDGET), greedy_allocate(options, BUDGET)
-    print(f"== Allocation plan (budget {BUDGET} units) ==")
-    print(f"  {'ward':<5} {'ward risk':<10} {'expected cases':<15} {'spend':<6} averted")
-    for w in range(WARDS):
-        o = options[w][dp.choice[w]]
-        print(f"  {w:<5} {wr[w]:<10.3f} {expected[w]:<15.3f} {o.cost:<6} {o.value:.3f}")
-    print(f"Total cost {dp.total_cost}, total expected cases averted (DP): {dp.total_value:.3f}")
-    print(f"Greedy baseline averts: {greedy.total_value:.3f}\n")
+    dp_plan = dp_allocate(options, BUDGET)
+    greedy_plan = greedy_allocate(options, BUDGET)
+    print("== Allocation plan (budget %d units) ==" % BUDGET)
+    print("  %-5s %-10s %-15s %-6s %s" % ("ward", "ward risk", "expected cases", "spend", "averted"))
+    for w in range(NUM_WARDS):
+        chosen = options[w][dp_plan.choice[w]]
+        print("  %-5d %-10.3f %-15.3f %-6d %.3f"
+              % (w, ward_scores[w], expected[w], chosen.cost, chosen.value))
+    print("Total cost %d, total expected cases averted (DP): %.3f"
+          % (dp_plan.total_cost, dp_plan.total_value))
+    print("Greedy baseline averts: %.3f\n" % greedy_plan.total_value)
 
-    # ---- LCS: which ward's trend looks like the riskiest ward's trend? ----
-    series, real = case_series_for_wards(csv_path, WARDS, DAYS, SEED)
-    riskiest = max(range(WARDS), key=lambda w: wr[w])
-    ref = discretise_series(series[riskiest])
-    print(f"== Trend similarity ({'real CSV' if real else 'synthetic'} case series) ==")
-    print(f"Ward {riskiest} trend: {ref}")
-    for w in range(WARDS):
-        t = discretise_series(series[w])
-        print(f"  ward {w}: {t}  similarity to ward {riskiest} = {lcs_similarity(ref, t):.2f}")
+    # ---- LCS: which ward's case trend looks like the riskiest ward's trend? ----
+    series, used_real = case_series_for_wards(csv_path, NUM_WARDS, DAYS, SEED)
+    riskiest = 0
+    for w in range(1, NUM_WARDS):
+        if ward_scores[w] > ward_scores[riskiest]:
+            riskiest = w
+    reference = discretise_series(series[riskiest])
+    if used_real:
+        source_name = "real CSV"
+    else:
+        source_name = "synthetic"
+    print("== Trend similarity (%s case series) ==" % source_name)
+    print("Ward %d trend: %s" % (riskiest, reference))
+    for w in range(NUM_WARDS):
+        trend = discretise_series(series[w])
+        print("  ward %d: %s  similarity to ward %d = %.2f"
+              % (w, trend, riskiest, lcs_similarity(reference, trend)))
 
 
 if __name__ == "__main__":
@@ -1348,7 +1693,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from outbreak.allocation import (brute_force_allocate, discretise_series, dp_allocate,
+from outbreak.allocation import (Option, brute_force_allocate, discretise_series, dp_allocate,
                                  greedy_allocate, lcs_length, lcs_similarity)
 from outbreak.avl_tree import AvlTree
 from outbreak.bst_baseline import BstBaseline
@@ -1368,8 +1713,7 @@ def check(cond, what=""):
     checks += 1
     if not cond:
         failed += 1
-        line = sys._getframe(1).f_lineno
-        print(f"  FAIL line {line} {what}")
+        print("  FAIL", what)
 
 
 def near(a, b):
@@ -1503,7 +1847,7 @@ def test_dijkstra_vs_bruteforce():
             best = [math.inf]
             brute(g, src, t, set(), 0.0, best)
             check((math.isinf(best[0]) and math.isinf(r.dist[t])) or near(best[0], r.dist[t]))
-            path = Graph.reconstruct_path(r, src, t)
+            path = g.reconstruct_path(r, src, t)
             if math.isinf(best[0]):
                 check(path == [] and g.hop_path(src, t) == [])
             else:
@@ -1517,7 +1861,7 @@ def test_likely_vs_hop_differ():
     g.add_edge(0, 1, 6.0, 1.0)
     g.add_edge(1, 2, 6.0, 1.0)
     hop = g.hop_path(0, 2)
-    likely = Graph.reconstruct_path(g.likely_path(0), 0, 2)
+    likely = g.reconstruct_path(g.likely_path(0), 0, 2)
     check(len(hop) == 2 and len(likely) == 3)
     check(g.path_probability(likely) > g.path_probability(hop))
 
@@ -1550,9 +1894,8 @@ def test_dp_vs_bruteforce():
 
 
 def test_greedy_strictly_worse():
-    from outbreak.allocation import Option as O
-    w = [[O(0, 0), O(1, 3)],    # ratio 3: greedy grabs it first
-         [O(0, 0), O(5, 10)]]   # ratio 2: no longer fits afterwards
+    w = [[Option(0, 0), Option(1, 3)],    # ratio 3: greedy grabs it first
+         [Option(0, 0), Option(5, 10)]]   # ratio 2: no longer fits afterwards
     dp, gr = dp_allocate(w, 5), greedy_allocate(w, 5)
     check(near(dp.total_value, 10.0) and near(gr.total_value, 3.0))
     check(dp.total_value > gr.total_value and dp.choice == [0, 1])
@@ -1562,8 +1905,7 @@ def test_greedy_strictly_worse():
 
 
 def test_infeasible():
-    from outbreak.allocation import Option as O
-    w = [[O(3, 1.0)], [O(4, 2.0)]]
+    w = [[Option(3, 1.0)], [Option(4, 2.0)]]
     check(not dp_allocate(w, 5).feasible)
     check(dp_allocate(w, 7).feasible and near(dp_allocate(w, 7).total_value, 3.0))
 
@@ -1581,7 +1923,7 @@ def test_lcs():
 def test_data_gen():
     g = generate_contact_graph(1000, 6.0, 5)
     g2 = generate_contact_graph(1000, 6.0, 5)
-    check(g.edge_count == 3000 and g2.edge_count == 3000 and g.adj[10] == g2.adj[10])
+    check(g.edge_count == 3000 and g2.edge_count == 3000 and len(g.adj[10]) == len(g2.adj[10]))
     p = generate_patients(50, 4, 1)
     check(len(p) == 50 and p[49].id == 49 and all(0 <= x.ward < 4 for x in p))
     series, real = case_series_for_wards("no_such_file.csv", 3, 10, 1)
@@ -1628,145 +1970,186 @@ if __name__ == "__main__":
 Benchmarks that write CSVs to `results/`.
 
 ```python
-"""Benchmarks. Every number printed or written to CSV comes from a real run here.
+"""Benchmarks. Every number printed or saved comes from a real run of this file.
 
-Usage: python3 benchmarks.py [--full] [--out results]
-Each timing is repeated REPS times on identical inputs and the mean is reported.
+Usage:  python3 benchmarks.py            (saves CSV files into results/)
+        python3 benchmarks.py --full     (also times the plain BST at n = 100000)
 
-Plain-BST insertion of 100000 SORTED keys is ~5 * 10^9 loop steps (O(n^2)), which in
-pure Python takes many minutes per repeat, so that single cell is skipped unless you
-pass --full. Skipped cells are shown as "skipped" and never filled with invented numbers.
+Each timing is repeated 5 times on the SAME input and the mean (average) is reported.
+
+Note: inserting 100000 SORTED keys into the plain BST takes about 5 billion steps
+(O(n^2)), which is many minutes per repeat in Python. So that one measurement is
+skipped unless you pass --full. A skipped cell says "skipped"; no numbers are invented.
 """
-import argparse
 import os
 import random
+import sys
 import time
 
 from outbreak.allocation import dp_allocate, greedy_allocate
 from outbreak.avl_tree import AvlTree
 from outbreak.bst_baseline import BstBaseline
 from outbreak.data_gen import generate_contact_graph, random_allocation_instance
-from outbreak.graph import Graph
 from outbreak.patient import Patient
 
-REPS = 5
+REPEATS = 5
 
 
-def mean_ms(fn) -> float:
-    """Run fn() REPS times; return the mean wall-clock time in milliseconds."""
-    total = 0.0
-    for _ in range(REPS):
-        t0 = time.perf_counter()
-        fn()
-        total += time.perf_counter() - t0
-    return total / REPS * 1000.0
+def time_it(function, *arguments):
+    """Call function(*arguments) REPEATS times.
+
+    Returns (mean time in milliseconds, the result of the last call).
+    """
+    total_seconds = 0.0
+    result = None
+    for i in range(REPEATS):
+        start = time.perf_counter()               # clock before
+        result = function(*arguments)
+        total_seconds += time.perf_counter() - start   # add the elapsed time
+    return total_seconds / REPEATS * 1000.0, result
 
 
-def bench_trees(out_dir: str, full: bool) -> None:
-    print(f"\n[1] AVL vs plain BST, sorted insertions (mean of {REPS} runs)")
-    print(f"{'n':<8}{'AVL height':<12}{'BST height':<12}{'AVL ms':<14}{'BST ms':<14}")
-    rows = ["n,avl_height,bst_height,avl_ms,bst_ms"]
-    for n in (1000, 10000, 100000):
-        data = [Patient(i, 40, i % 5, 1 + i % 5) for i in range(n)]  # identical input for both
-        h = {}
+def build_avl(patients):
+    tree = AvlTree()
+    for patient in patients:
+        tree.insert(patient)
+    return tree
 
-        def build_avl():
-            t = AvlTree()
-            for p in data:
-                t.insert(p)
-            h["avl"] = t.height()
 
-        def build_bst():
-            t = BstBaseline()
-            for p in data:
-                t.insert(p)
-            h["bst"] = t.height()
+def build_bst(patients):
+    tree = BstBaseline()
+    for patient in patients:
+        tree.insert(patient)
+    return tree
 
-        avl_ms = mean_ms(build_avl)
-        if n == 100000 and not full:
-            bst_h, bst_ms = "skipped", "skipped"
+
+def save_csv(folder, filename, lines):
+    """Write a list of text lines to folder/filename."""
+    with open(os.path.join(folder, filename), "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def bench_trees(folder, run_full):
+    print("\n[1] AVL vs plain BST, sorted insertions (mean of %d runs)" % REPEATS)
+    print("%-8s%-12s%-12s%-14s%-14s" % ("n", "AVL height", "BST height", "AVL ms", "BST ms"))
+    lines = ["n,avl_height,bst_height,avl_ms,bst_ms"]
+    for n in [1000, 10000, 100000]:
+        # The same list of patients (ids already sorted 0..n-1) goes into both trees.
+        patients = []
+        for i in range(n):
+            patients.append(Patient(i, 40, i % 5, 1 + i % 5))
+
+        avl_ms, avl_tree = time_it(build_avl, patients)
+        if n == 100000 and not run_full:
+            bst_height = "skipped"
+            bst_ms = "skipped"
+            bst_ms_text = "skipped"
         else:
-            bst_ms = mean_ms(build_bst)
-            bst_h = h["bst"]
-        bst_ms_txt = bst_ms if isinstance(bst_ms, str) else f"{bst_ms:.3f}"
-        print(f"{n:<8}{h['avl']:<12}{bst_h:<12}{avl_ms:<14.3f}{bst_ms_txt:<14}")
-        rows.append(f"{n},{h['avl']},{bst_h},{avl_ms},{bst_ms}")
-    write_csv(out_dir, "bench_tree.csv", rows)
+            bst_ms, bst_tree = time_it(build_bst, patients)
+            bst_height = bst_tree.height()
+            bst_ms_text = "%.3f" % bst_ms
+        print("%-8d%-12d%-12s%-14.3f%-14s"
+              % (n, avl_tree.height(), bst_height, avl_ms, bst_ms_text))
+        lines.append("%d,%d,%s,%s,%s" % (n, avl_tree.height(), bst_height, avl_ms, bst_ms))
+    save_csv(folder, "bench_tree.csv", lines)
 
 
-def bench_paths(out_dir: str) -> None:
-    sources, targets_per_source = 20, 10  # up to 200 (source, target) pairs per size
+def bench_paths(folder):
     print("\n[2] Dijkstra (most likely) vs BFS (fewest hops), average degree 6")
-    print(f"{'nodes':<8}{'edges':<9}{'dijkstra ms':<13}{'bfs ms':<10}{'pairs':<7}"
-          f"{'differ':<8}{'differ %':<10}{'mean p likely':<15}{'mean p hops':<12}")
-    rows = ["nodes,edges,dijkstra_ms,bfs_ms,pairs,paths_differ,differ_pct,mean_p_likely,mean_p_hops"]
-    for n in (1000, 10000, 100000):
-        g = generate_contact_graph(n, 6.0, 99)
-        dijkstra_ms = mean_ms(lambda: g.likely_path(0))
-        bfs_ms = mean_ms(lambda: g.bfs_levels(0))  # single-source, like Dijkstra
+    print("%-8s%-9s%-13s%-10s%-7s%-8s%-10s%-15s%-12s"
+          % ("nodes", "edges", "dijkstra ms", "bfs ms", "pairs", "differ", "differ %",
+             "mean p likely", "mean p hops"))
+    lines = ["nodes,edges,dijkstra_ms,bfs_ms,pairs,paths_differ,differ_pct,"
+             "mean_p_likely,mean_p_hops"]
+    for n in [1000, 10000, 100000]:
+        graph = generate_contact_graph(n, 6.0, 99)     # the same graph for both methods
+
+        # Runtime: both start at node 0 and compute results for ALL nodes.
+        dijkstra_ms, ignore = time_it(graph.likely_path, 0)
+        bfs_ms, ignore = time_it(graph.bfs_levels, 0)
+
+        # How often do the two paths differ? Try 20 random sources x 10 random targets.
         rng = random.Random(123)
-        pairs = differ = 0
-        sum_likely = sum_hops = 0.0
-        for _ in range(sources):
-            s = rng.randrange(n)
-            result = g.likely_path(s)
-            for _ in range(targets_per_source):
-                t = rng.randrange(n)
-                if t == s:
+        pairs = 0
+        differ = 0
+        sum_p_likely = 0.0
+        sum_p_hops = 0.0
+        for s in range(20):
+            source = rng.randrange(n)
+            result = graph.likely_path(source)       # one Dijkstra serves all 10 targets
+            for t in range(10):
+                target = rng.randrange(n)
+                if target == source:
                     continue
-                likely = Graph.reconstruct_path(result, s, t)
-                if not likely:
-                    continue  # other component: nothing to compare
-                hops = g.hop_path(s, t)
+                likely = graph.reconstruct_path(result, source, target)
+                if len(likely) == 0:
+                    continue                         # not connected: nothing to compare
+                hops = graph.hop_path(source, target)
                 pairs += 1
-                differ += likely != hops
-                sum_likely += g.path_probability(likely)
-                sum_hops += g.path_probability(hops)
-        pct = 100.0 * differ / pairs if pairs else 0.0
-        mp_l, mp_h = (sum_likely / pairs, sum_hops / pairs) if pairs else (0.0, 0.0)
-        print(f"{n:<8}{g.edge_count:<9}{dijkstra_ms:<13.3f}{bfs_ms:<10.3f}{pairs:<7}"
-              f"{differ:<8}{pct:<10.1f}{mp_l:<15.5f}{mp_h:<12.5f}")
-        rows.append(f"{n},{g.edge_count},{dijkstra_ms},{bfs_ms},{pairs},{differ},{pct},{mp_l},{mp_h}")
-    write_csv(out_dir, "bench_paths.csv", rows)
+                if likely != hops:                   # the two lists of nodes are different
+                    differ += 1
+                sum_p_likely += graph.path_probability(likely)
+                sum_p_hops += graph.path_probability(hops)
+
+        if pairs > 0:
+            differ_pct = 100.0 * differ / pairs
+            mean_likely = sum_p_likely / pairs
+            mean_hops = sum_p_hops / pairs
+        else:
+            differ_pct = mean_likely = mean_hops = 0.0
+        print("%-8d%-9d%-13.3f%-10.3f%-7d%-8d%-10.1f%-15.5f%-12.5f"
+              % (n, graph.edge_count, dijkstra_ms, bfs_ms, pairs, differ, differ_pct,
+                 mean_likely, mean_hops))
+        lines.append("%d,%d,%s,%s,%d,%d,%s,%s,%s"
+                     % (n, graph.edge_count, dijkstra_ms, bfs_ms, pairs, differ,
+                        differ_pct, mean_likely, mean_hops))
+    save_csv(folder, "bench_paths.csv", lines)
 
 
-def bench_allocation(out_dir: str) -> None:
-    instances, wards, options, budget = 50, 8, 4, 25
-    rows = ["instance,dp_value,greedy_value,improvement,improvement_pct"]
-    sum_dp = sum_greedy = sum_pct = 0.0
+def bench_allocation(folder):
+    instances = 50
+    num_wards = 8
+    options_per_ward = 4
+    budget = 25
+    lines = ["instance,dp_value,greedy_value,improvement,improvement_pct"]
+    sum_dp = 0.0
+    sum_greedy = 0.0
+    sum_pct = 0.0
     dp_better = 0
     for i in range(instances):
-        w = random_allocation_instance(wards, options, 1000 + i)  # same instance for both methods
-        dp = dp_allocate(w, budget).total_value
-        greedy = greedy_allocate(w, budget).total_value
-        gain = dp - greedy
-        pct = 100.0 * gain / greedy if greedy > 0 else 0.0
-        rows.append(f"{i},{dp},{greedy},{gain},{pct}")
-        sum_dp, sum_greedy, sum_pct = sum_dp + dp, sum_greedy + greedy, sum_pct + pct
-        dp_better += gain > 1e-9
-    print(f"\n[3] DP vs greedy allocation: {instances} random instances, {wards} wards, "
-          f"{options} options, budget {budget}")
-    print(f"{'mean cases averted (DP)':<26}{'mean (greedy)':<14}")
-    print(f"{sum_dp / instances:<26.4f}{sum_greedy / instances:<14.4f}")
-    print(f"mean improvement: {(sum_dp - sum_greedy) / instances:.4f} cases "
-          f"({sum_pct / instances:.2f} % per instance on average); "
-          f"DP strictly better on {dp_better} of {instances}")
-    write_csv(out_dir, "bench_alloc.csv", rows)
+        # Both methods get the SAME random problem.
+        wards = random_allocation_instance(num_wards, options_per_ward, 1000 + i)
+        dp_value = dp_allocate(wards, budget).total_value
+        greedy_value = greedy_allocate(wards, budget).total_value
+        gain = dp_value - greedy_value
+        if greedy_value > 0:
+            gain_pct = 100.0 * gain / greedy_value
+        else:
+            gain_pct = 0.0
+        lines.append("%d,%s,%s,%s,%s" % (i, dp_value, greedy_value, gain, gain_pct))
+        sum_dp += dp_value
+        sum_greedy += greedy_value
+        sum_pct += gain_pct
+        if gain > 1e-9:
+            dp_better += 1
 
-
-def write_csv(out_dir: str, name: str, rows) -> None:
-    with open(os.path.join(out_dir, name), "w") as f:
-        f.write("\n".join(rows) + "\n")
+    print("\n[3] DP vs greedy allocation: %d random instances, %d wards, %d options, budget %d"
+          % (instances, num_wards, options_per_ward, budget))
+    print("%-26s%-14s" % ("mean cases averted (DP)", "mean (greedy)"))
+    print("%-26.4f%-14.4f" % (sum_dp / instances, sum_greedy / instances))
+    print("mean improvement: %.4f cases (%.2f %% per instance on average); "
+          "DP strictly better on %d of %d"
+          % ((sum_dp - sum_greedy) / instances, sum_pct / instances, dp_better, instances))
+    save_csv(folder, "bench_alloc.csv", lines)
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--full", action="store_true", help="also time plain BST at n=100000 (very slow)")
-    ap.add_argument("--out", default="results", help="output directory for CSV files")
-    args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
-    bench_trees(args.out, args.full)
-    bench_paths(args.out)
-    bench_allocation(args.out)
-    print(f"\nCSV files written to {args.out}/")
+    run_full = "--full" in sys.argv
+    folder = "results"
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    bench_trees(folder, run_full)
+    bench_paths(folder)
+    bench_allocation(folder)
+    print("\nCSV files written to %s/" % folder)
 ```
